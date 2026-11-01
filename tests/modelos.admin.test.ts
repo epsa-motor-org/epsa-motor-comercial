@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { crearApp } from '../src/app';
+import { configurarVerificadorImagen } from '../src/utils/imagen.contenido';
+
+// Estas pruebas no tienen red: la revisión de los bytes de la imagen se prueba aparte (imagenes.contenido.test.ts)
+configurarVerificadorImagen(async () => {});
 
 const UUIDS = {
   Gerente: '00000000-0000-0000-0000-000000000001',

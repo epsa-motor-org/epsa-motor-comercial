@@ -8,6 +8,7 @@ const hu007 = readFileSync('supabase/migrations/202610070001_hu007_permisos_rol.
 const hu014 = readFileSync('supabase/migrations/202610090001_hu014_registro_lead_manual.sql', 'utf8');
 const hu014Correccion = readFileSync('supabase/migrations/202610100001_hu014_modelo_publicado.sql', 'utf8');
 const hu015 = readFileSync('supabase/migrations/202610220001_hu015_asignacion_leads.sql', 'utf8');
+const sinHttp407 = readFileSync('supabase/migrations/202610310001_hu015_responsable_sin_http_407.sql', 'utf8');
 
 test('HU015 PostgreSQL: seguridad, visibilidad por rol, asignación transaccional e idempotencia', async t => {
   const db = new PGlite();
@@ -50,6 +51,7 @@ test('HU015 PostgreSQL: seguridad, visibilidad por rol, asignación transacciona
       INSERT INTO seguimientolead(codlea,codusu,fecinisle,horsle,tipsle,dessle,fecprosle)
         VALUES (2,2,'2026-01-04T10:00:00Z','10:00:00','Llamada','Actividad original','2030-01-05T12:00:00Z');`);
     await db.exec(hu015);
+    await db.exec(sinHttp407);
 
     await t.test('migración crea historial append-only, índices y RPCs con permisos limitados', async () => {
       const rls = (await db.query<any>(`SELECT relrowsecurity FROM pg_class WHERE oid='public.asignacionlead'::regclass`)).rows[0].relrowsecurity;
@@ -172,14 +174,14 @@ test('HU015 PostgreSQL: seguridad, visibilidad por rol, asignación transacciona
     await t.test('rechaza transferencia obsoleta, responsable inactivo/rol inválido y actor vendedor', async () => {
       await login(1);
       await assert.rejects(asignar(1, 1, 3, 'Motivo'), (e: any) => e.code === 'PT416');
-      await assert.rejects(asignar(1, 4, 2, 'Motivo'), (e: any) => e.code === 'PT407');
-      await assert.rejects(asignar(1, 5, 2, 'Motivo'), (e: any) => e.code === 'PT407');
+      await assert.rejects(asignar(1, 4, 2, 'Motivo'), (e: any) => e.code === 'PT422');
+      await assert.rejects(asignar(1, 5, 2, 'Motivo'), (e: any) => e.code === 'PT422');
       await assert.rejects(asignar(999, 3, null, null), (e: any) => e.code === 'PT404');
       await assert.rejects(asignar(3, 3, 1, null), (e: any) => e.code === 'PT400' || e.code === 'PT416');
       await salir();
       await db.exec("UPDATE rol SET estrol=false WHERE nomrol='Vendedor'");
       await login(1);
-      await assert.rejects(asignar(1, 3, 2, 'Motivo'), (e: any) => e.code === 'PT407');
+      await assert.rejects(asignar(1, 3, 2, 'Motivo'), (e: any) => e.code === 'PT422');
       await salir();
       await db.exec("UPDATE rol SET estrol=true WHERE nomrol='Vendedor'");
       await login(3);

@@ -147,8 +147,10 @@ export async function ubicacionInicialApi(coduni, cuerpo, clave) {
   const data = await ubicacionInicialSqlApi(coduni, cuerpo.codubi, cuerpo.observacion);
   return { message: "Ubicación inicial registrada", data };
 }
-// Fecha y hora de un movimiento tal como las registra el servidor («2026-10-21» y «10:45:12»)
-export const momentoMov = (fecha, hora) => (fecha ? `${fecha}T${String(hora || "00:00:00").slice(0, 8)}` : "");
+// Fecha y hora de un movimiento: la base las guarda en UTC (su CURRENT_DATE y LOCALTIME, p. ej. «2026-10-31» y
+// «20:30:20» para las 15:30 de Lima). Aquí se arma ese instante en UTC, sin convertirlo; se muestra una sola vez
+// en hora de Lima con cuandoMov (MovimientosUnidad.jsx). También sirve para ordenar y para «hace cuánto».
+export const momentoMov = (fecha, hora) => (fecha ? `${fecha}T${String(hora || "00:00:00").slice(0, 8)}Z` : "");
 
 // HU-023 · Compras pendientes (ruta de la API; la pantalla usa primero la función SQL, que es la misma)
 export const comprasPendientesApi = ({ origen, limite = 200, offset = 0 } = {}) => pedir(`/api/compras-pendientes${consulta({ origen, limite, offset })}`).then((r) => r.data);

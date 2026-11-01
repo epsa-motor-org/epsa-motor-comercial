@@ -23,6 +23,8 @@ export function responderErrorLead(res: Response, error: unknown) {
     PT405: [404, 'La sede no existe'],
     PT406: [404, 'El canal WhatsApp no existe'],
     PT407: [404, 'El responsable no existe o no está habilitado'],
+    // Código vigente (migración 202610310001): PT407 hacía que PostgREST respondiera HTTP 407 y la API daba 500
+    PT422: [404, 'El responsable no existe o no está habilitado'],
     PT409: [409, 'Ya existe una oportunidad activa para este contacto'],
     '23514': [400, 'Los datos no cumplen las restricciones del lead']
   };

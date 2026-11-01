@@ -6,7 +6,6 @@ import { momentoMov, movimientosUnidadApi, useConsultaCentral } from "../../serv
 import { TIPO_LUGAR } from "../../servicios/inventarioCentral";
 import { Aviso, Card } from "../ui";
 import { Pill } from "./Sprint2";
-import { fechaCompleta } from "./Central";
 import { ModalLlegadaCentral, ModalTrasladoCentral, ModalUbicacionInicial } from "./ModalesCentral";
 import { leerMotivo } from "../../lib/motivos";
 
@@ -25,8 +24,15 @@ export function MotivoMov({ observacion, className = "" }) {
 export const ESTADO_MOV = { "En transito": "En tránsito", Finalizado: "Recibida", Pendiente: "Programado", Cancelado: "Cancelado" };
 export const TONO_MOV = { "En transito": "celeste", Finalizado: "verde", Pendiente: "ambar", Cancelado: "gris" };
 
-// «21 oct 2026, 10:45» a partir de la fecha y la hora que guarda el servidor
-export const cuandoMov = (fecha, hora) => fechaCompleta(momentoMov(fecha, hora));
+// «21 oct 2026, 10:45» en hora de Lima, a partir de la fecha y la hora (UTC) que guarda el servidor
+const ZONA = "America/Lima";
+export const cuandoMov = (fecha, hora) => {
+  const iso = momentoMov(fecha, hora);
+  if (!iso) return "";
+  const d = new Date(iso);
+  const dia = d.toLocaleDateString("es-PE", { day: "numeric", month: "short", year: "numeric", timeZone: ZONA }).replace(".", "");
+  return `${dia}, ${d.toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: ZONA })}`;
+};
 
 // Flecha de origen a destino (punteada si va en camino)
 export function RutaMov({ m }) {
