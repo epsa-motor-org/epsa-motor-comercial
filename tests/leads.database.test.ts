@@ -5,6 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 
 const migracion = readFileSync('supabase/migrations/202610090001_hu014_registro_lead_manual.sql', 'utf8');
 const correccion = readFileSync('supabase/migrations/202610100001_hu014_modelo_publicado.sql', 'utf8');
+const sinHttp407 = readFileSync('supabase/migrations/202610310001_hu015_responsable_sin_http_407.sql', 'utf8');
 test('HU014 PostgreSQL: migración, reglas comerciales, atomicidad y seguridad', async t => {
   const db = new PGlite();
   let consecutivo = 0;
@@ -59,6 +60,11 @@ test('HU014 PostgreSQL: migración, reglas comerciales, atomicidad y seguridad',
         WHERE oid='public.hu014_registrar_lead_manual(text,text,bigint,text,text,bigint,timestamptz,text,text,bigint,bigint,text,boolean)'::regprocedure`)).rows[0].acl;
       await db.exec(correccion);
       await db.exec(correccion);
+      // Responsable inexistente: PT422 en vez de PT407 (reaplicable y sin cambiar permisos)
+      await db.exec(sinHttp407);
+      await db.exec(sinHttp407);
+      assert.equal((await db.query<any>(`SELECT count(*)::int AS n FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+        WHERE n.nspname='public' AND p.prosrc LIKE '%''PT407''%'`)).rows[0].n, 0);
       const aclActual = (await db.query<any>(`SELECT proacl::text AS acl FROM pg_proc
         WHERE oid='public.hu014_registrar_lead_manual(text,text,bigint,text,text,bigint,timestamptz,text,text,bigint,bigint,text,boolean)'::regprocedure`)).rows[0].acl;
       assert.equal(aclActual, aclAnterior);
@@ -120,8 +126,8 @@ test('HU014 PostgreSQL: migración, reglas comerciales, atomicidad y seguridad',
       await rechaza({ codmod: 999 }, 'PT404');
       await rechaza({ canlea: 'Presencial', codsed: 999 }, 'PT405');
       await rechaza({ canlea: 'WhatsApp', codcwa: 999 }, 'PT406');
-      await rechaza({ codusu: 999 }, 'PT407');
-      await rechaza({ codusu: 4 }, 'PT407');
+      await rechaza({ codusu: 999 }, 'PT422');
+      await rechaza({ codusu: 4 }, 'PT422');
       const sed = await crear({ canlea: ' presencial ', codsed: 1 }); assert.equal(sed.codsed, '1'); assert.equal(sed.canlea, 'Presencial');
       const wa = await crear({ canlea: ' WHATSAPP ', codcwa: 1, orilea: ' Facebook ' });
       assert.equal(wa.codcwa, '1'); assert.equal(wa.canlea, 'WhatsApp'); assert.equal(wa.orilea, 'Facebook');

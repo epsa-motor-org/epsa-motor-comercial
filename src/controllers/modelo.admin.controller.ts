@@ -2,6 +2,7 @@ import type { RequestHandler, Response } from 'express';
 import { ErrorHttp } from '../utils/errores';
 import * as servicio from '../services/modelo.admin.service';
 import { validarActualizarImagenModelo, validarCambiosModelo, validarCrearImagenModelo, validarCrearModelo, validarEstadoImagenModelo, validarEstadoModelo, validarIdImagenModelo, validarIdModeloAdmin } from '../utils/modelo.admin.validacion';
+import { verificarUrlImagen } from '../utils/imagen.contenido';
 
 function responderErrorModeloAdmin(res: Response, error: unknown) {
   if (error instanceof ErrorHttp) return res.status(error.status).json({ ok: false, message: error.message });
@@ -70,6 +71,8 @@ export const crearAgregarImagenModelo: RequestHandler = async (req, res) => {
   try {
     const codmod = validarIdModeloAdmin(req.params.id);
     const imagen = validarCrearImagenModelo(req.body);
+    // HU-036: el archivo debe ser una imagen legible antes de registrarlo (también si se llama sin el panel)
+    await verificarUrlImagen(imagen.urlimo);
     const data = await servicio.agregarImagenModelo(res.locals.db, codmod, imagen);
     res.status(201).json({ ok: true, message: 'Imagen registrada correctamente', data });
   } catch (error) { responderErrorModeloAdmin(res, error); }
@@ -80,6 +83,8 @@ export const crearActualizarImagenModelo: RequestHandler = async (req, res) => {
     const codmod = validarIdModeloAdmin(req.params.id);
     const codimo = validarIdImagenModelo(req.params.codimo);
     const imagen = validarActualizarImagenModelo(req.body);
+    // HU-036: si el archivo nuevo está dañado, se rechaza y la foto anterior queda como estaba
+    await verificarUrlImagen(imagen.urlimo);
     const data = await servicio.actualizarImagenModelo(res.locals.db, codmod, codimo, imagen);
     res.json({ ok: true, message: 'Imagen actualizada correctamente', data });
   } catch (error) { responderErrorModeloAdmin(res, error); }

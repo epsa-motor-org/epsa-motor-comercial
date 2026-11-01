@@ -161,7 +161,7 @@ test('HU014 API: conflicto malformado no filtra details', async () => entorno(as
   const r = await request(); assert.equal(r.status, 409); assert.ok(!('coincidencia' in r.body));
 }, { data: null, error: { code: 'PT409', details: '{privado' } }));
 for (const [code, status] of [['PT400', 400], ['PT404', 404], ['PT405', 404], ['PT406', 404],
-  ['PT407', 404], ['42501', 403], ['XX000', 500], ['23514', 400]] as const) {
+  ['PT407', 404], ['PT422', 404], ['42501', 403], ['XX000', 500], ['23514', 400]] as const) {
   test(`HU014 API: ${code} devuelve ${status} sin errores internos`, async () => entorno(async request => {
     const r = await request(); assert.equal(r.status, status); assert.ok(!JSON.stringify(r.body).includes('privado'));
     if (code === 'PT404') assert.equal(r.body.message, 'El modelo no existe o no está publicado');

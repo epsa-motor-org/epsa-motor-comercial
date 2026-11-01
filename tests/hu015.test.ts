@@ -131,7 +131,7 @@ test('HU015 HTTP: GET y PATCH requieren sesión válida; roles no autorizados re
 }));
 
 test('HU015 HTTP: errores de RPC devuelven respuestas controladas sin detalles internos', async () => {
-  for (const [code, status] of [['PT400', 400], ['PT404', 404], ['PT407', 404], ['42501', 403], ['XX000', 500]] as const) {
+  for (const [code, status] of [['PT400', 400], ['PT404', 404], ['PT407', 404], ['PT422', 404], ['42501', 403], ['XX000', 500]] as const) {
     await entorno(async request => {
       const r = await request({ path: '/api/leads/10/responsable', method: 'PATCH',
         body: { codusuNuevo: '2', codusuEsperado: null } });
