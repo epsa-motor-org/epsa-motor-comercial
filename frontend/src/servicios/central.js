@@ -172,7 +172,11 @@ export async function leadsCentralApi() {
   const { lista } = await paginas("/api/leads", {}, (d) => (Array.isArray(d) ? d : d?.items));
   return { leads: lista.map(leadDesdeApi) };
 }
-export const responsablesApi = () => pedir("/api/leads/responsables").then((r) => (r.data || []).map((u) => ({ codusu: String(u.codusu), nombre: nombreUsuario(u), rol: u.rol, activo: true })));
+// La cuenta interna que importa las facturas por correo (HU-030, «Integracion Facturas») no es una persona y no
+// atiende interesados: no se ofrece para asignar, transferir ni filtrar
+const sinTildes = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+const esCuentaInterna = (u) => sinTildes(u?.nomusu) === "integracion" && sinTildes(u?.apepatusu) === "facturas";
+export const responsablesApi = () => pedir("/api/leads/responsables").then((r) => (r.data || []).filter((u) => !esCuentaInterna(u)).map((u) => ({ codusu: String(u.codusu), nombre: nombreUsuario(u), rol: u.rol, activo: true })));
 export const asignarLeadApi = (codlea, { codusuNuevo, codusuEsperado, motivo }) =>
   pedir(`/api/leads/${encodeURIComponent(codlea)}/responsable`, { metodo: "PATCH", cuerpo: { codusuNuevo: String(codusuNuevo), codusuEsperado: codusuEsperado == null ? null : String(codusuEsperado), motivo: motivo || "" } });
 
