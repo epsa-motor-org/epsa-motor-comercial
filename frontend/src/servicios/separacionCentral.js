@@ -18,6 +18,10 @@ export const COMPROMETIDA = ["Separada", "Vendida"];
 // «No disponible» (aún no se puso a la venta) también se puede separar: la entrega queda para cuando esté lista.
 export const sePuedeSeparar = (u) => Boolean(u?.nummotuni && u?.chauni) && !COMPROMETIDA.includes(u?.comercial);
 
+// La API a la que está conectado el panel no tiene las rutas de la HU-005 (responde 404 sin JSON)
+export const FALTA_INSTALAR = "La API conectada todavía no tiene la separación: falta desplegar su versión nueva. Si estás probando en tu computadora, inicia la API de esta rama (npm run dev) y conecta el panel a ella con EPSA_API_LOCAL=1.";
+export const faltaInstalar = (e) => Boolean(e?.detalle?.sinRuta);
+
 // Datos del formulario: quién soy, responsables, gerentes y tipos de documento
 export const formularioSeparacionApi = () => pedir("/api/separaciones/formulario").then((r) => r.data);
 // Comprador por número de documento (null si no está registrado)
@@ -33,6 +37,9 @@ export function subirCapturaApi(coduni, archivo) {
 // La separación (201 nueva; 200 si era el mismo envío y ya estaba guardado)
 export const separarMotoApi = (coduni, cuerpo, clave) =>
   pedir(`/api/unidades/${coduni}/separaciones`, { metodo: "POST", cuerpo, headers: { "Idempotency-Key": clave } });
+// Techo que eligió el cliente (después de separar). Elegir el mismo techo otra vez no cambia nada.
+export const elegirTechoApi = (coduni, codtte) =>
+  pedir(`/api/unidades/${coduni}/separacion/techo`, { metodo: "POST", cuerpo: { codtte: Number(codtte) } }).then((r) => r.data);
 // Separación activa de una moto (null si no tiene)
 export const separacionActivaApi = (coduni) => pedir(`/api/unidades/${coduni}/separacion`).then((r) => r.data ?? null);
 // Abrir la captura guardada (dirección temporal; solo para los roles comerciales)
@@ -74,7 +81,20 @@ export const soloNombre = (v, max = 100) => String(v ?? "").replace(new RegExp(`
 export const soloRazonSocial = (v, max = 100) => String(v ?? "").replace(new RegExp(`[^${LETRAS}0-9&.,' -]`, "g"), "").replace(/\s{2,}/g, " ").replace(/^\s+/, "").slice(0, max);
 const esNombre = (t) => t.length >= 2 && t.length <= 100 && new RegExp(`^[${LETRAS}' .-]+$`).test(t) && (t.match(/\p{L}/gu) || []).length >= 2;
 const esRazonSocial = (t) => t.length >= 2 && t.length <= 100 && new RegExp(`^[${LETRAS}0-9&.,' -]+$`).test(t) && (t.match(/\p{L}/gu) || []).length >= 2;
-export const filtrarTelefono = (v) => String(v ?? "").replace(/[^0-9+() -]/g, "").replace(/(?!^)\+/g, "").replace(/ {2,}/g, " ").slice(0, 20);
+// Celular peruano: solo dígitos, como máximo 9
+export const filtrarTelefono = (v) => String(v ?? "").replace(/\D/g, "").slice(0, 9);
+export const errorTelefono = (v) => {
+  const t = String(v ?? "");
+  if (!t) return "Escribe el celular del comprador.";
+  if (!t.startsWith("9")) return "El celular empieza con 9.";
+  if (t.length < 9) return `Faltan ${9 - t.length} dígito${9 - t.length === 1 ? "" : "s"}: el celular tiene 9.`;
+  return "";
+};
+export const errorCorreo = (v) => {
+  const c = limpio(v).toLowerCase();
+  if (!c) return "Escribe el correo del comprador.";
+  return c.length <= 254 && /^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(c) ? "" : "Escribe un correo válido (ejemplo: nombre@correo.com).";
+};
 export const filtrarMonto = (v) => {
   const t = String(v ?? "").replace(",", ".").replace(/[^\d.]/g, "");
   const [ent, ...dec] = t.split(".");
@@ -91,13 +111,10 @@ export function erroresCompradorNuevo(tipo, numero, c) {
     if (!esNombre(limpio(c.apellidoPaterno))) x.apellidoPaterno = "Escribe el apellido paterno (solo letras).";
     if (limpio(c.apellidoMaterno) && !esNombre(limpio(c.apellidoMaterno))) x.apellidoMaterno = "Solo letras.";
   }
-  const tel = limpio(c.telefono);
-  if (tel) {
-    const digitos = tel.replace(/\D/g, "").length;
-    if (!/^\+?[0-9() -]+$/.test(tel) || digitos < 7 || digitos > 15) x.telefono = "Teléfono de 7 a 15 dígitos (ejemplo: 987 654 321).";
-  }
-  const correo = limpio(c.correo).toLowerCase();
-  if (correo && (correo.length > 254 || !/^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(correo))) x.correo = "Escribe un correo válido (ejemplo: nombre@correo.com).";
+  const tel = errorTelefono(c.telefono);
+  if (tel) x.telefono = tel;
+  const correo = errorCorreo(c.correo);
+  if (correo) x.correo = correo;
   return x;
 }
 

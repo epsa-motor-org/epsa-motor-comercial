@@ -4,7 +4,7 @@ import { ErrorHttp } from '../utils/errores';
 import { TIPO_EVIDENCIA } from '../utils/separacion.apoyo.validacion';
 import type {
   CompradorSeparacion, EvidenciaSubida, FormatoEvidencia, FormularioSeparacion, RegistrarCompradorInput,
-  SeparacionActiva
+  SeparacionActiva, TechoElegido
 } from '../types/separacion.apoyo.types';
 
 export const BUCKET_EVIDENCIA = 'separaciones-evidencia';
@@ -31,6 +31,12 @@ export async function obtenerSeparacionActiva(db: SupabaseClient, coduni: string
   const { data, error } = await db.rpc('hu005_separacion_activa', { p_coduni: coduni });
   if (error) throw error;
   return (data ?? null) as SeparacionActiva | null;
+}
+
+export async function elegirTecho(db: SupabaseClient, coduni: string, codtte: string): Promise<TechoElegido> {
+  const { data, error } = await db.rpc('hu005_elegir_techo', { p_coduni: coduni, p_codtte: codtte });
+  if (error) throw error;
+  return data as TechoElegido;
 }
 
 function errorStorage(error: unknown): never {

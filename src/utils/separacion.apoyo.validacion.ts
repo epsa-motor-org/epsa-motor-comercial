@@ -36,15 +36,32 @@ export function validarRegistrarComprador(body: unknown): RegistrarCompradorInpu
     throw new ErrorHttp(400, 'codtdo debe ser un entero positivo');
   const nombres = textoOpcional(datos.nombres, 'nombres', 100);
   if (!nombres || nombres.length < 2) throw new ErrorHttp(400, 'nombres es obligatorio');
+  const telefono = (textoOpcional(datos.telefono, 'telefono', 20) ?? '').replace(/[\s-]+/g, '');
+  if (!/^9\d{8}$/.test(telefono)) throw new ErrorHttp(400, 'El celular debe tener 9 dígitos y empezar con 9');
+  const correo = (textoOpcional(datos.correo, 'correo', 254) ?? '').toLowerCase();
+  if (!/^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(correo))
+    throw new ErrorHttp(400, 'Escribe un correo válido');
   return {
     p_codtdo: String(datos.codtdo),
     p_numdoc: validarNumeroDocumento(datos.numeroDocumento),
     p_nombres: nombres,
     p_apellido_paterno: textoOpcional(datos.apellidoPaterno, 'apellidoPaterno', 100),
     p_apellido_materno: textoOpcional(datos.apellidoMaterno, 'apellidoMaterno', 100),
-    p_telefono: textoOpcional(datos.telefono, 'telefono', 20),
-    p_correo: textoOpcional(datos.correo, 'correo', 254)
+    p_telefono: telefono,
+    p_correo: correo
   };
+}
+
+// Techo que eligió el cliente: { codtte } entero positivo
+export function validarElegirTecho(body: unknown): string {
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    throw new ErrorHttp(400, 'El cuerpo debe ser un objeto JSON');
+  const datos = body as Record<string, unknown>;
+  const extra = Object.keys(datos).find(c => c !== 'codtte');
+  if (extra) throw new ErrorHttp(400, `Campo no permitido: ${extra}`);
+  if (typeof datos.codtte !== 'number' || !Number.isSafeInteger(datos.codtte) || datos.codtte <= 0)
+    throw new ErrorHttp(400, 'codtte debe ser un entero positivo');
+  return String(datos.codtte);
 }
 
 // La captura debe ser de verdad una imagen PNG, JPG o WEBP legible, o un PDF completo.

@@ -11,6 +11,19 @@ export interface FormularioSeparacion {
   tiposDocumento: { codtdo: string; nombre: string }[];
   responsables: ParticipanteSeparacion[];
   gerentes: ParticipanteSeparacion[];
+  tiposTecho: TipoTechoSeparacion[];
+}
+
+export interface TipoTechoSeparacion {
+  codtte: string;
+  nombre: string;
+  requiereInstalacion: boolean;
+}
+
+export interface TechoElegido {
+  coduni: string;
+  techo: TipoTechoSeparacion;
+  preparacion: unknown;
 }
 
 export interface CompradorSeparacion {
@@ -33,8 +46,8 @@ export interface RegistrarCompradorInput {
   p_nombres: string;
   p_apellido_paterno: string | null;
   p_apellido_materno: string | null;
-  p_telefono: string | null;
-  p_correo: string | null;
+  p_telefono: string;
+  p_correo: string;
 }
 
 export type FormatoEvidencia = 'jpeg' | 'png' | 'webp' | 'pdf';
@@ -64,4 +77,11 @@ export interface SeparacionActiva {
   fechaConfirmacion: string | null;
   fechaRegistro: string;
   estado: string;
+  techo: {
+    codtte: string | null;
+    nombre: string | null;
+    requiereInstalacion: boolean;
+    estado: string | null;
+    proveedor: string | null;
+  } | null;
 }

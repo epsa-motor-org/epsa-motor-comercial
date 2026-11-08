@@ -126,21 +126,23 @@ test('HU-005 apoyo: busca comprador por documento normalizado y responde null si
 
 test('HU-005 apoyo: registra comprador nuevo (201), devuelve el existente (200) y valida el cuerpo', async () => entorno(async (base, llamadas) => {
   const nuevo = { codtdo: 1, numeroDocumento: '45879632', nombres: '  Rosa   ', apellidoPaterno: 'Quispe',
-    apellidoMaterno: 'Huamán', telefono: '987654321', correo: null };
+    apellidoMaterno: 'Huamán', telefono: '987 654-321', correo: ' Rosa.Q@Correo.PE ' };
   const creado = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json(nuevo));
   assert.equal(creado.status, 201);
   assert.equal((creado.body.data as { existente: boolean }).existente, false);
   assert.deepEqual(llamadas[0], {
     nombre: 'hu005_registrar_cliente', token: 'vendedor',
     parametros: { p_codtdo: '1', p_numdoc: '45879632', p_nombres: 'Rosa', p_apellido_paterno: 'Quispe',
-      p_apellido_materno: 'Huamán', p_telefono: '987654321', p_correo: null }
+      p_apellido_materno: 'Huamán', p_telefono: '987654321', p_correo: 'rosa.q@correo.pe' }
   });
   const repetido = await pedir(`${base}/api/separaciones/compradores`, 'gerente', json({ ...nuevo, numeroDocumento: '11111111' }));
   assert.equal(repetido.status, 200);
   assert.equal((repetido.body.data as { existente: boolean }).existente, true);
 
   for (const malo of [{ ...nuevo, codtdo: 'DNI' }, { ...nuevo, nombres: '' }, { ...nuevo, numeroDocumento: 'a' },
-    { ...nuevo, estcli: false }, { ...nuevo, telefono: 'x'.repeat(21) }, []]) {
+    { ...nuevo, estcli: false }, { ...nuevo, telefono: 'x'.repeat(21) }, { ...nuevo, telefono: '512345678' },
+    { ...nuevo, telefono: '98765432' }, { ...nuevo, telefono: '9876543210' }, { ...nuevo, telefono: null },
+    { ...nuevo, correo: null }, { ...nuevo, correo: 'sin-arroba' }, []]) {
     assert.equal((await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json(malo))).status, 400);
   }
   assert.equal(llamadas.length, 2);
@@ -149,7 +151,8 @@ test('HU-005 apoyo: registra comprador nuevo (201), devuelve el existente (200) 
 })));
 
 test('HU-005 apoyo: los errores de la base no filtran detalles internos', async () => entorno(async base => {
-  const valido = { codtdo: 1, numeroDocumento: '4587963', nombres: 'Rosa', apellidoPaterno: 'Quispe' };
+  const valido = { codtdo: 1, numeroDocumento: '4587963', nombres: 'Rosa', apellidoPaterno: 'Quispe',
+    telefono: '987654321', correo: 'rosa@correo.pe' };
   const r = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json(valido));
   assert.equal(r.status, 400);
   assert.equal(r.body.message, 'El número no corresponde al tipo de documento');
@@ -249,3 +252,32 @@ test('HU-005 apoyo: consulta la separación activa de una moto para los tres rol
 }, (_nombre, parametros) => ({
   data: (parametros as { p_coduni: string }).p_coduni === '12' ? { codsep: '7', coduni: '12', estado: 'Activa' } : null, error: null
 })));
+
+test('HU-005 apoyo: registra el techo que eligió el cliente de una moto separada', async () => entorno(async (base, llamadas) => {
+  const url = `${base}/api/unidades/12/separacion/techo`;
+  for (const token of ['gerente', 'administradora', 'vendedor']) {
+    const r = await pedir(url, token, json({ codtte: 2 }));
+    assert.equal(r.status, 200);
+    assert.equal((r.body.data as { techo: { nombre: string } }).techo.nombre, 'Lona');
+  }
+  const libre = await pedir(`${base}/api/unidades/13/separacion/techo`, 'vendedor', json({ codtte: 2 }));
+  assert.equal(libre.status, 409);
+  assert.equal(libre.body.message, 'La moto no tiene una separación activa');
+  const inactivo = await pedir(url, 'vendedor', json({ codtte: 99 }));
+  assert.equal(inactivo.status, 400);
+  assert.equal(inactivo.body.message, 'Tipo de techo inexistente o inactivo');
+  for (const malo of [{ codtte: '2' }, { codtte: 0 }, { codtte: 2, codpro: 1 }, {}, []]) {
+    assert.equal((await pedir(url, 'vendedor', json(malo))).status, 400);
+  }
+  assert.equal((await pedir(url, 'auxiliar', json({ codtte: 2 }))).status, 403);
+  assert.equal((await pedir(url, '', json({ codtte: 2 }))).status, 401);
+  assert.deepEqual(llamadas.map(l => l.parametros), [
+    { p_coduni: '12', p_codtte: '2' }, { p_coduni: '12', p_codtte: '2' }, { p_coduni: '12', p_codtte: '2' },
+    { p_coduni: '13', p_codtte: '2' }, { p_coduni: '12', p_codtte: '99' }
+  ]);
+}, (_nombre, parametros) => {
+  const { p_coduni, p_codtte } = parametros as { p_coduni: string; p_codtte: string };
+  if (p_coduni === '13') return errorRPC('PT409', 'La moto no tiene una separación activa');
+  if (p_codtte === '99') return errorRPC('PT400', 'Tipo de techo inexistente o inactivo');
+  return { data: { coduni: p_coduni, techo: { codtte: '2', nombre: 'Lona', requiereInstalacion: true }, preparacion: {} }, error: null };
+}));

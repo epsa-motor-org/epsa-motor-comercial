@@ -16,7 +16,7 @@ import ModeloImg from "../../components/ModeloImg";
 import MotoIllustration from "../../components/MotoIllustration";
 import { Card, PageHeader, Stat, Tabla, btnMini } from "../../components/ui";
 import { ColorPunto, EstadoConexion, Pestanas, Pill } from "../../components/dashboard/Sprint2";
-import { AvisoConexion, MotosPorIdentificar, nombreUnidad, sinApi, BarraActualizacion, ColorUnidad, PillComercial, PillPreparacion, TextoTecho, TextoUbicacion, capital } from "../../components/dashboard/Central";
+import { AvisoConexion, nombreUnidad, sinApi, BarraActualizacion, ColorUnidad, PillComercial, PillPreparacion, TextoTecho, TextoUbicacion, capital } from "../../components/dashboard/Central";
 
 const CLAVE_FILTROS = "epsa-filtros-disponibilidad";
 const SERVIDOR_INICIAL = { codubi: "", codmod: "" };
@@ -26,6 +26,8 @@ function leerFiltros() {
 }
 
 // Texto de la situación comercial con su cantidad (libre, no disponible, separada o vendida)
+// HU-005 · Botón principal para separar (se distingue de «Ver ficha»)
+const btnSeparar = "rounded-md bg-marino-700 px-3 py-1 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-marino focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-marino-700 dark:bg-white dark:text-marino dark:hover:bg-white/90";
 const textoComercial = (c, k) => ({ Libre: k === 1 ? "libre" : "libres", "No disponible": k === 1 ? "no disponible" : "no disponibles", Separada: k === 1 ? "separada" : "separadas", Vendida: k === 1 ? "vendida" : "vendidas" }[c] || String(c).toLowerCase());
 
 export default function DisponibilidadCentral() {
@@ -60,7 +62,7 @@ export default function DisponibilidadCentral() {
   const filtrosActivos = [
     nombreLugar && `Ubicación: ${nombreLugar}`, nombreModelo && `Modelo: ${nombreModelo}`, f.prep && `Preparación: ${f.prep}`,
     f.comercial === "" ? "Incluye vendidas" : f.comercial !== "activas" && `Situación: ${f.comercial}`,
-    f.color && `Color: ${f.color}`, f.techo && { sin: "Sin techo", con: "Con techo", definir: "Techo por definir" }[f.techo], f.q && `Búsqueda: «${f.q.trim()}»`,
+    f.color && `Color: ${f.color}`, f.techo && { sin: "Sin techo", con: "Con techo" }[f.techo], f.q && `Búsqueda: «${f.q.trim()}»`,
   ].filter(Boolean);
   const colores = [...new Set([...COLORES, ...unidades.map((u) => capital(u.coluni)).filter(Boolean)])];
   const modeloWeb = (codmod) => publicos.find((m) => String(m.codmodApi || "") === String(codmod));
@@ -83,11 +85,11 @@ export default function DisponibilidadCentral() {
         </p>
         <p className="mt-0.5 text-[12.5px] text-slate-500">
           {(() => { const x = ubicacionDe(u); return <span className={x.transito ? "font-semibold text-sky-700 dark:text-sky-300" : x.sin ? "font-semibold text-amber-700 dark:text-amber-300" : ""}>{x.texto}{x.programado ? `, ${x.detalle.toLowerCase()}` : ""}</span>; })()}
-          {", "}techo: {u.preparacion?.techo?.configuracion || "por definir"}, chasis {u.chauni}
+          {", "}{(u.preparacion?.techo?.configuracion || "sin techo").toLowerCase()}, chasis {u.chauni}
         </p>
       </div>
       <span className="flex shrink-0 gap-2">
-        {separa && sePuedeSeparar(u) && <button type="button" className={btnMini} onClick={() => setSeparar(u)} data-separar={u.coduni}>Separar</button>}
+        {separa && sePuedeSeparar(u) && <button type="button" className={btnSeparar} onClick={() => setSeparar(u)} data-separar={u.coduni}>Separar</button>}
         <Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ver ficha</Link>
       </span>
     </li>
@@ -108,7 +110,6 @@ export default function DisponibilidadCentral() {
         <BarraActualizacion consulta={consulta} />
       </PageHeader>
       <AvisoConexion consulta={consulta} que="el inventario central" />
-      <MotosPorIdentificar />
 
       {/* Indicadores (siguen a los filtros) */}
       <div className="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-4" data-indicadores>
@@ -134,10 +135,10 @@ export default function DisponibilidadCentral() {
             <select id="disp-prep" className="field-input" value={f.prep} onChange={(e) => cambiar("prep", e.target.value)}><option value="">Todas las etapas</option>{ETAPAS_FILTRO.map((e) => <option key={e}>{e}</option>)}</select></div>
           <div><label className="field-label" htmlFor="disp-comercial">Situación comercial</label>
             <select id="disp-comercial" className="field-input" value={f.comercial} onChange={(e) => cambiar("comercial", e.target.value)}>
-              <option value="activas">Libres y separadas</option><option value="Libre">Solo libres</option><option value="Separada">Solo separadas</option><option value="No disponible">Solo no disponibles</option><option value="Vendida">Solo vendidas</option><option value="">Todas, con vendidas</option>
+              <option value="activas">Libres y separadas</option><option value="Libre">Solo libres</option><option value="Separada">Solo separadas</option><option value="Vendida">Solo vendidas</option><option value="">Todas, con vendidas</option>
             </select></div>
           <div><label className="field-label" htmlFor="disp-techo">Techo</label>
-            <select id="disp-techo" className="field-input" value={f.techo} onChange={(e) => cambiar("techo", e.target.value)}><option value="">Con o sin techo</option><option value="sin">Sin techo</option><option value="con">Con techo</option><option value="definir">Por definir</option></select></div>
+            <select id="disp-techo" className="field-input" value={f.techo} onChange={(e) => cambiar("techo", e.target.value)}><option value="">Con o sin techo</option><option value="sin">Sin techo</option><option value="con">Con techo</option></select></div>
           <div><label className="field-label" htmlFor="disp-buscar">Buscar</label><input id="disp-buscar" className="field-input" value={f.q} maxLength={40} onChange={(e) => cambiar("q", e.target.value)} placeholder="Motor, chasis o N°" /></div>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Color">
@@ -277,12 +278,12 @@ export default function DisponibilidadCentral() {
               <td className="px-4 py-3"><TextoTecho preparacion={u.preparacion} /></td>
               <td className="px-4 py-3"><PillPreparacion preparacion={u.preparacion} /></td>
               <td className="px-4 py-3"><PillComercial comercial={u.comercial} /></td>
-              <td className="px-4 py-3"><span className="flex gap-2">{separa && sePuedeSeparar(u) && <button type="button" className={btnMini} onClick={() => setSeparar(u)} data-separar={u.coduni}>Separar</button>}<Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ficha</Link></span></td>
+              <td className="px-4 py-3"><span className="flex gap-2">{separa && sePuedeSeparar(u) && <button type="button" className={btnSeparar} onClick={() => setSeparar(u)} data-separar={u.coduni}>Separar</button>}<Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ficha</Link></span></td>
             </tr>
           ))}
         </Tabla>
       )}
-      <p className="mt-4 text-[12.5px] text-slate-400">Ubicación, preparación y situación comercial se registran por separado: una moto comprada o en Ancón no figura como lista para entrega.</p>
+      <p className="mt-4 text-[12.5px] text-slate-400">Ubicación, preparación y situación comercial se registran por separado. Toda moto libre se puede vender con o sin techo; si el cliente elige un techo al separar, queda por armar en Preparación.</p>
       {separar && <SepararMotoCentral unidad={separar} onClose={() => setSeparar(null)} onHecho={() => consulta.refrescar(true)} onConflicto={() => consulta.refrescar(true)} />}
     </div>
   );
