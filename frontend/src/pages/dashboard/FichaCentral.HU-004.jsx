@@ -1,6 +1,7 @@
 // HU-004 · Ficha de la unidad (base central) · HU-001, HU-003 y HU-033
 // Ubicación, preparación y situación comercial se muestran por separado. Gerente y administradora registran
 // movimientos y avances; el vendedor solo consulta. La ficha se actualiza sola.
+// HU-005: los tres roles comerciales separan la moto desde aquí y ven su separación activa.
 import { useEffect, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { Link } from "../../components/dashboard/LinkPanel";
@@ -14,6 +15,8 @@ import { Aviso, Campo, Card, PageHeader, useConfirm, useToast } from "../../comp
 import { AvisoConexion, BarraActualizacion, PillComercial, PillPreparacion, capital, nombreUnidad } from "../../components/dashboard/Central";
 import MovimientosUnidad from "../../components/dashboard/MovimientosUnidad";
 import { PreparacionUnidadCard } from "../../components/dashboard/PreparacionUnidad";
+import SepararMotoCentral, { SeparacionActivaCard } from "../../components/dashboard/SepararCentral";
+import { sePuedeSeparar } from "../../servicios/separacionCentral";
 const DESCRIPCION_TECHO = {
   "Sin techo": "La unidad no lleva techo instalado.",
   Lona: "Techo de lona. No necesita proveedor externo.",
@@ -30,6 +33,8 @@ export default function FichaCentralRuta() {
 function FichaCentral({ id }) {
   const { puede } = useAuth();
   const gestiona = puede("unidades.gestionar");
+  const separa = puede("separaciones.registrar");
+  const [separando, setSeparando] = useState(false);
   const { state } = useLocation();
   const valido = /^[1-9]\d{0,18}$/.test(String(id));
   const consulta = useConsultaCentral(() => unidadCentralApi(id), [id], { activo: valido, clave: `unidad:${id}` });
@@ -84,13 +89,15 @@ function FichaCentral({ id }) {
       <div className="mb-6 grid gap-4 md:grid-cols-3" data-ejes>
         <Card data-eje="ubicacion"><p className="text-[12px] font-semibold text-slate-400">Ubicación registrada</p><p className={`mt-1 text-[1.25rem] font-bold ${x.transito ? "text-sky-700 dark:text-sky-300" : x.sin ? "text-amber-700 dark:text-amber-300" : "text-marino dark:text-white"}`}>{x.texto}</p><p className="text-[12.5px] text-slate-500">{x.detalle}</p></Card>
         <Card data-eje="preparacion"><p className="text-[12px] font-semibold text-slate-400">Preparación</p><div className="mt-1.5"><PillPreparacion preparacion={p} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{prep.nota || `Techo: ${t.config}`}</p></Card>
-        <Card data-eje="comercial"><p className="text-[12px] font-semibold text-slate-400">Situación comercial</p><div className="mt-1.5"><PillComercial comercial={u.comercial} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{textoSituacion}</p>{gestiona && <PonerALaVenta unidad={u} onCambio={recargar} />}</Card>
+        <Card data-eje="comercial"><p className="text-[12px] font-semibold text-slate-400">Situación comercial</p><div className="mt-1.5"><PillComercial comercial={u.comercial} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{textoSituacion}</p>{gestiona && <PonerALaVenta unidad={u} onCambio={recargar} />}{separa && sePuedeSeparar(u) && <button className="btn btn-primary mt-3 !py-2 text-[13px] sm:ml-2" onClick={() => setSeparando(true)} data-separar-ficha>Separar esta moto</button>}</Card>
       </div>
+      {u.comercial === "Separada" && <div className="mb-6"><SeparacionActivaCard unidad={u} /></div>}
       <div className="mb-6"><PreparacionUnidadCard unidad={u} gestiona={gestiona} onCambio={recargar} /></div>
       <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
         <MovimientosUnidad unidad={u} gestiona={gestiona} ubicaciones={ubicaciones} onCambio={recargar} />
         <ConfigTecho unidad={u} gestiona={gestiona} onGuardado={recargar} />
       </div>
+      {separando && <SepararMotoCentral unidad={u} onClose={() => setSeparando(false)} onHecho={recargar} onConflicto={recargar} />}
     </div>
   );
 }

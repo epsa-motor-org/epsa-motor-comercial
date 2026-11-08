@@ -2,12 +2,15 @@
 // La misma lectura para gerente, administradora y vendedores: ubicación, modelo, color, techo, preparación y
 // situación comercial, cada una por separado. Sin clientes, costos ni boletas. La ubicación se filtra en el servidor
 // y el modelo aquí (con la lista de modelos que tienen motos); la vista se actualiza sola, con «Actualizar» y al volver
-// a la pestaña.
+// a la pestaña. HU-005: desde aquí se separa una moto libre (sin mostrar clientes en esta vista).
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "../../components/dashboard/LinkPanel";
 import { useApp } from "../../store/appStore.jsx";
+import { useAuth } from "../../context/AuthContext";
 import { COLORES } from "../../data/mockData";
 import { inventarioApi, useConsultaCentral } from "../../servicios/central";
+import { sePuedeSeparar } from "../../servicios/separacionCentral";
+import SepararMotoCentral from "../../components/dashboard/SepararCentral";
 import { ETAPAS_FILTRO_CENTRAL as ETAPAS_FILTRO, FILTRO_INICIAL, GRUPOS_LUGAR_API, TONO_COMERCIAL, contar, filtrarUnidades, modelosDeUnidades, ubicacionDe } from "../../servicios/inventarioCentral";
 import ModeloImg from "../../components/ModeloImg";
 import MotoIllustration from "../../components/MotoIllustration";
@@ -27,6 +30,9 @@ const textoComercial = (c, k) => ({ Libre: k === 1 ? "libre" : "libres", "No dis
 
 export default function DisponibilidadCentral() {
   const { publicos = [] } = useApp();
+  const { puede } = useAuth();
+  const separa = puede("separaciones.registrar");
+  const [separar, setSeparar] = useState(null);
   const guardado = useMemo(leerFiltros, []);
   const [servidor, setServidor] = useState({ ...SERVIDOR_INICIAL, ...guardado.servidor });
   const [f, setF] = useState({ ...FILTRO_INICIAL, ...guardado.f });
@@ -80,7 +86,10 @@ export default function DisponibilidadCentral() {
           {", "}techo: {u.preparacion?.techo?.configuracion || "por definir"}, chasis {u.chauni}
         </p>
       </div>
-      <Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ver ficha</Link>
+      <span className="flex shrink-0 gap-2">
+        {separa && sePuedeSeparar(u) && <button type="button" className={btnMini} onClick={() => setSeparar(u)} data-separar={u.coduni}>Separar</button>}
+        <Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ver ficha</Link>
+      </span>
     </li>
   );
 
@@ -268,12 +277,13 @@ export default function DisponibilidadCentral() {
               <td className="px-4 py-3"><TextoTecho preparacion={u.preparacion} /></td>
               <td className="px-4 py-3"><PillPreparacion preparacion={u.preparacion} /></td>
               <td className="px-4 py-3"><PillComercial comercial={u.comercial} /></td>
-              <td className="px-4 py-3"><Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ficha</Link></td>
+              <td className="px-4 py-3"><span className="flex gap-2">{separa && sePuedeSeparar(u) && <button type="button" className={btnMini} onClick={() => setSeparar(u)} data-separar={u.coduni}>Separar</button>}<Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ficha</Link></span></td>
             </tr>
           ))}
         </Tabla>
       )}
       <p className="mt-4 text-[12.5px] text-slate-400">Ubicación, preparación y situación comercial se registran por separado: una moto comprada o en Ancón no figura como lista para entrega.</p>
+      {separar && <SepararMotoCentral unidad={separar} onClose={() => setSeparar(null)} onHecho={() => consulta.refrescar(true)} onConflicto={() => consulta.refrescar(true)} />}
     </div>
   );
 }
