@@ -19,6 +19,7 @@ export function responderErrorSeparacion(res: Response, error: unknown) {
     PT431: [409, 'Idempotency-Key ya fue utilizada con otros datos'],
     PT432: [422, 'La unidad todavía no está identificada'],
     PT433: [422, 'El confirmador del ingreso no existe, está inactivo o no es gerente'],
+    PT434: [422, 'La captura de la transferencia no está guardada o no corresponde a esta moto'],
     '23503': [404, 'No se encontró la unidad, el comprador o el responsable'],
     '23505': [409, 'La unidad ya tiene una separación activa'],
     '23514': [400, 'Los datos no cumplen las restricciones de separación'],

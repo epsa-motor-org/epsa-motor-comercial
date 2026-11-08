@@ -1,6 +1,7 @@
 // HU-004 · Ficha de la unidad (base central) · HU-001, HU-003 y HU-033
 // Ubicación, preparación y situación comercial se muestran por separado. Gerente y administradora registran
 // movimientos y avances; el vendedor solo consulta. La ficha se actualiza sola.
+// HU-005: los tres roles comerciales separan la moto desde aquí y ven su separación activa.
 import { useEffect, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { Link } from "../../components/dashboard/LinkPanel";
@@ -11,9 +12,11 @@ import { mensajeError } from "../../lib/errores";
 import { unidadCentralApi, useConsultaCentral } from "../../servicios/central";
 import { preparacionDe, techoDe, ubicacionDe } from "../../servicios/inventarioCentral";
 import { Aviso, Campo, Card, PageHeader, useConfirm, useToast } from "../../components/ui";
-import { AvisoConexion, BarraActualizacion, PillComercial, PillPreparacion, capital, nombreUnidad } from "../../components/dashboard/Central";
+import { AvisoConexion, BarraActualizacion, PillComercial, PillPreparacion, capital } from "../../components/dashboard/Central";
 import MovimientosUnidad from "../../components/dashboard/MovimientosUnidad";
 import { PreparacionUnidadCard } from "../../components/dashboard/PreparacionUnidad";
+import SepararMotoCentral, { SeparacionActivaCard } from "../../components/dashboard/SepararCentral";
+import { sePuedeSeparar } from "../../servicios/separacionCentral";
 const DESCRIPCION_TECHO = {
   "Sin techo": "La unidad no lleva techo instalado.",
   Lona: "Techo de lona. No necesita proveedor externo.",
@@ -30,6 +33,8 @@ export default function FichaCentralRuta() {
 function FichaCentral({ id }) {
   const { puede } = useAuth();
   const gestiona = puede("unidades.gestionar");
+  const separa = puede("separaciones.registrar");
+  const [separando, setSeparando] = useState(false);
   const { state } = useLocation();
   const valido = /^[1-9]\d{0,18}$/.test(String(id));
   const consulta = useConsultaCentral(() => unidadCentralApi(id), [id], { activo: valido, clave: `unidad:${id}` });
@@ -70,7 +75,7 @@ function FichaCentral({ id }) {
   const p = u.preparacion;
   const t = techoDe(p);
   const prep = preparacionDe(p);
-  const textoSituacion = { Libre: "Disponible para vender: el vendedor la ve libre en Disponibilidad.", "No disponible": "Todavía no está a la venta.", Separada: "Tiene una separación activa.", Vendida: "Tiene una venta registrada." }[u.comercial] || "";
+  const textoSituacion = { Libre: "Libre para vender, con o sin techo.", "No disponible": "Todavía no está a la venta.", Separada: "Tiene una separación activa.", Vendida: "Tiene una venta registrada." }[u.comercial] || "";
 
   // Inventario central (API de Michelle): ubicación, techo, preparación y situación tal como están en la base,
   // con la preparación por etapas (HU-033), los movimientos (HU-003) y la configuración de techo (HU-004).
@@ -84,40 +89,17 @@ function FichaCentral({ id }) {
       <div className="mb-6 grid gap-4 md:grid-cols-3" data-ejes>
         <Card data-eje="ubicacion"><p className="text-[12px] font-semibold text-slate-400">Ubicación registrada</p><p className={`mt-1 text-[1.25rem] font-bold ${x.transito ? "text-sky-700 dark:text-sky-300" : x.sin ? "text-amber-700 dark:text-amber-300" : "text-marino dark:text-white"}`}>{x.texto}</p><p className="text-[12.5px] text-slate-500">{x.detalle}</p></Card>
         <Card data-eje="preparacion"><p className="text-[12px] font-semibold text-slate-400">Preparación</p><div className="mt-1.5"><PillPreparacion preparacion={p} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{prep.nota || `Techo: ${t.config}`}</p></Card>
-        <Card data-eje="comercial"><p className="text-[12px] font-semibold text-slate-400">Situación comercial</p><div className="mt-1.5"><PillComercial comercial={u.comercial} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{textoSituacion}</p>{gestiona && <PonerALaVenta unidad={u} onCambio={recargar} />}</Card>
+        <Card data-eje="comercial"><p className="text-[12px] font-semibold text-slate-400">Situación comercial</p><div className="mt-1.5"><PillComercial comercial={u.comercial} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{textoSituacion}</p>{separa && sePuedeSeparar(u) && <button className="btn btn-primary mt-3 !py-2 text-[13px] sm:ml-2" onClick={() => setSeparando(true)} data-separar-ficha>Separar esta moto</button>}</Card>
       </div>
+      {u.comercial === "Separada" && <div className="mb-6"><SeparacionActivaCard unidad={u} /></div>}
       <div className="mb-6"><PreparacionUnidadCard unidad={u} gestiona={gestiona} onCambio={recargar} /></div>
       <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
         <MovimientosUnidad unidad={u} gestiona={gestiona} ubicaciones={ubicaciones} onCambio={recargar} />
         <ConfigTecho unidad={u} gestiona={gestiona} onGuardado={recargar} />
       </div>
+      {separando && <SepararMotoCentral unidad={u} onClose={() => setSeparando(false)} onHecho={recargar} onConflicto={recargar} />}
     </div>
   );
-}
-
-// Poner la moto a la venta (o retirarla) cuando ya está lista para entrega (docs/supabase-sprint2-final.sql).
-// Solo cambia entre «No disponible» y «Disponible»: separaciones y ventas no se tocan aquí.
-function PonerALaVenta({ unidad, onCambio }) {
-  const toast = useToast(); const confirmar = useConfirm();
-  const [enviando, setEnviando] = useState(false);
-  const lista = Boolean(unidad.preparacion?.lista_para_entrega);
-  if (!["No disponible", "Libre"].includes(unidad.comercial)) return null;
-  const aLaVenta = unidad.comercial === "Libre";
-  async function cambiar() {
-    const ok = await confirmar(aLaVenta
-      ? { titulo: "¿Retirar de la venta?", texto: `${nombreUnidad(unidad)} dejará de verse libre para los vendedores.`, boton: "Retirar de la venta" }
-      : { titulo: "¿Poner a la venta?", texto: `${nombreUnidad(unidad)} quedará disponible y los vendedores la verán libre en Disponibilidad.`, boton: "Poner a la venta" });
-    if (!ok) return;
-    setEnviando(true);
-    try {
-      await api.situacionComercialApi(unidad.coduni, aLaVenta ? "No disponible" : "Disponible");
-      toast(aLaVenta ? "La moto se retiró de la venta" : "La moto ya está a la venta");
-      onCambio?.();
-    } catch (e) { toast(mensajeError(e), "error"); }
-    finally { setEnviando(false); }
-  }
-  if (!aLaVenta && !lista) return <p className="mt-2 text-[12px] text-slate-400">Se podrá poner a la venta cuando esté lista para entrega.</p>;
-  return <button className={`btn mt-3 !py-2 text-[13px] ${aLaVenta ? "btn-secondary" : "btn-primary"}`} disabled={enviando} onClick={cambiar} data-poner-venta>{enviando ? "Guardando…" : aLaVenta ? "Retirar de la venta" : "Poner a la venta"}</button>;
 }
 
 // HU-004 · Tipo de techo y proveedor (la API de Michelle; el avance de instalación es de HU-033)
@@ -151,7 +133,7 @@ function ConfigTecho({ unidad, gestiona, onGuardado }) {
 
   if (!gestiona) {
     const filas = soloLectura
-      ? [["Tipo de techo", soloLectura.tipoTecho?.nombre || "Por definir"], ["Proveedor", soloLectura.proveedor?.nombre || "No aplica"], ["Detalle", soloLectura.detalle || "Sin detalle"]]
+      ? [["Tipo de techo", soloLectura.tipoTecho?.nombre || "Sin techo"], ["Proveedor", soloLectura.proveedor?.nombre || "No aplica"], ["Detalle", soloLectura.detalle || "Sin detalle"]]
       : [["Tipo de techo", t.config], ["Proveedor", t.proveedor || "No aplica"], ["Instalación", t.avance === "No requiere" ? "No requiere" : t.avance]];
     return (
       <Card>

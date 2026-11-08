@@ -1,16 +1,17 @@
-// HU-033 · Preparación de una moto con las funciones de Michelle (armado y techo, con fecha, autor y observación)
-// La entrega no se marca a mano: la moto queda «Lista para entrega» cuando se cumplen sus etapas según su techo.
+// HU-033 · Preparación de una moto con las funciones de Michelle (techo, con fecha, autor y observación)
+// La moto se vende con o sin techo. Solo el techo que eligió el cliente al separar queda pendiente de armado
+// hasta que se registra instalado; sin techo elegido, la moto no tiene pendientes.
 // Registrar un avance no cambia la ubicación ni la situación comercial. Una reimportación no reinicia nada.
 import { useState } from "react";
 import { actualizarPreparacionApi, preparacionUnidadApi } from "../../lib/api";
 import { mensajeError } from "../../lib/errores";
 import { useConsultaCentral, useIntento } from "../../servicios/central";
-import { etapaOperativa } from "../../servicios/inventarioCentral";
+import { etapaOperativa, techoPorArmar } from "../../servicios/inventarioCentral";
 import { Aviso, Campo, Card, Modal, useToast } from "../ui";
 import { Pill } from "./Sprint2";
 import { ColorUnidad, fechaCompleta, nombreUnidad } from "./Central";
 
-const TEXTO_TECHO = { Pendiente: "Falta instalar", "En proceso": "Instalación en proceso", Instalado: "Instalado", "No requiere": "No requiere instalación" };
+const TEXTO_TECHO = { Pendiente: "Falta armar el techo", "En proceso": "Techo en armado", Instalado: "Instalado", "No requiere": "No requiere armado" };
 const limpio = (t) => String(t || "").trim().replace(/\s+/g, " ");
 
 // Qué avances se pueden registrar desde el estado actual
@@ -18,9 +19,8 @@ export function accionesPreparacion(po) {
   if (!po) return [];
   const t = po.techo || {};
   const a = [];
-  if (po.armado !== "Terminado") a.push({ etapa: "Armado", estado: "Terminado", texto: "Armado terminado" });
   if (t.configuracion && t.requiereInstalacion) {
-    if (t.estado === "Pendiente") a.push({ etapa: "Techo", estado: "En proceso", texto: "Techo en proceso" });
+    if (t.estado === "Pendiente") a.push({ etapa: "Techo", estado: "En proceso", texto: "Techo en armado" });
     if (t.estado !== "Instalado") a.push({ etapa: "Techo", estado: "Instalado", texto: "Techo instalado" });
   }
   if (t.configuracion && !t.requiereInstalacion && t.estado !== "No requiere") a.push({ etapa: "Techo", estado: "No requiere", texto: "Techo no requiere instalación" });
@@ -124,7 +124,7 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-marino dark:text-white">Preparación</h2>
-          <p className="text-[13px] text-slate-500">Las motos llegan parcialmente armadas y sin techo. La factura no marca nada como terminado.</p>
+          <p className="text-[13px] text-slate-500">La moto se vende con o sin techo. Si el cliente elige un techo al separar, aquí se registra su armado hasta que quede instalado.</p>
         </div>
         {po && <Pill tono={e.tono}>{e.etapa}</Pill>}
       </div>
@@ -132,26 +132,22 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
       {!po && !consulta.error && <p className="mt-3 text-[13px] text-slate-400">Cargando la preparación…</p>}
       {po && <>
         <ol className="mt-4 divide-y divide-slate-100 rounded-xl border border-slate-100 dark:divide-white/10 dark:border-white/10">
-          <li className="flex flex-wrap items-center justify-between gap-3 px-4 py-3" data-etapa="Armado">
-            <div><p className="text-[14px] font-semibold text-marino dark:text-white">1. Armado</p><p className="text-[12.5px] text-slate-500">{po.armado === "Terminado" ? "Terminado." : "Pendiente. Se termina en Ventanilla."}</p></div>
-            {gestiona && <button className="btn btn-secondary !px-3 !py-1.5 text-[13px]" onClick={() => abrir("Armado", po.armado === "Terminado" ? "Pendiente" : "Terminado")}>{po.armado === "Terminado" ? "Corregir armado" : "Marcar armado terminado"}</button>}
-          </li>
           <li className="flex flex-wrap items-center justify-between gap-3 px-4 py-3" data-etapa="Techo">
             <div className="min-w-0">
-              <p className="text-[14px] font-semibold text-marino dark:text-white">2. Techo</p>
-              <p className="text-[12.5px] text-slate-500">{t.configuracion ? <>Configuración: <b className="text-marino dark:text-white">{t.configuracion}</b>{po.proveedorTecho ? ` con ${po.proveedorTecho}` : ""}. {TEXTO_TECHO[t.estado] || t.estado}.</> : "Falta definir la configuración del techo (más abajo)."}</p>
+              <p className="text-[14px] font-semibold text-marino dark:text-white">1. Techo</p>
+              <p className="text-[12.5px] text-slate-500">{t.configuracion ? <>Techo: <b className="text-marino dark:text-white">{t.configuracion}</b>{po.proveedorTecho ? ` con ${po.proveedorTecho}` : ""}. {TEXTO_TECHO[t.estado] || t.estado}.</> : "Sin techo. Si el cliente elige un techo al separar, aquí se registra su armado."}</p>
             </div>
             {gestiona && t.configuracion && (t.requiereInstalacion
               ? <button className="btn btn-secondary !px-3 !py-1.5 text-[13px]" onClick={() => abrir("Techo", t.estado === "Pendiente" ? "En proceso" : t.estado === "En proceso" ? "Instalado" : "Instalado")}>Registrar avance del techo</button>
               : t.estado !== "No requiere" && <button className="btn btn-secondary !px-3 !py-1.5 text-[13px]" onClick={() => abrir("Techo", "No requiere")}>Marcar sin instalación</button>)}
           </li>
           <li className="px-4 py-3" data-etapa="Entrega">
-            <p className="text-[14px] font-semibold text-marino dark:text-white">3. Condición de entrega</p>
-            <p className="text-[12.5px] text-slate-500">{po.preparacionCompleta ? "Lista para entrega. No equivale a entregada al comprador." : `Falta: ${(po.condicionesFaltantes || []).join(". ")}.`}</p>
+            <p className="text-[14px] font-semibold text-marino dark:text-white">2. Condición de entrega</p>
+            <p className="text-[12.5px] text-slate-500">{techoPorArmar(po) ? `Falta armar el techo (${t.configuracion}).` : "Lista para entrega. No equivale a entregada al comprador."}</p>
           </li>
         </ol>
         {po.ultimaActualizacion && <p className="mt-2 text-[12px] text-slate-400">Última actualización: {fechaCompleta(po.ultimaActualizacion)}{po.actualizadoPor?.nombre ? `, ${po.actualizadoPor.nombre}` : ""}</p>}
-        {!gestiona && <p className="mt-2 text-[12.5px] text-slate-400">Solo gerencia y administración registran avances de preparación.</p>}
+        {!gestiona && <p className="mt-2 text-[12.5px] text-slate-400">Solo gerencia y administración registran el armado del techo.</p>}
         <div className="mt-5">
           <h3 className="text-[13.5px] font-semibold text-marino dark:text-white">Historial de preparación</h3>
           {historial.length === 0 ? <p className="mt-1 text-[13px] text-slate-400">Aún no se registraron avances.</p> : (

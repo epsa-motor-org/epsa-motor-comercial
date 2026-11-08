@@ -9,7 +9,7 @@ import { inventarioApi, useConsultaCentral } from "../../servicios/central";
 import { ETAPAS_FILTRO_CENTRAL, FILTRO_INICIAL, GRUPOS_LUGAR_API, filtrarUnidades } from "../../servicios/inventarioCentral";
 import { Card, PageHeader, Stat, Tabla, Vacio, btnMini } from "../../components/ui";
 import { EstadoConexion } from "../../components/dashboard/Sprint2";
-import { AbrirPorNumero, AvisoConexion, MotosPorIdentificar, nombreUnidad, sinApi, BarraActualizacion, ColorUnidad, PillComercial, PillPreparacion, TextoTecho, TextoUbicacion } from "../../components/dashboard/Central";
+import { AbrirPorNumero, AvisoConexion, nombreUnidad, sinApi, BarraActualizacion, ColorUnidad, PillComercial, PillPreparacion, TextoTecho, TextoUbicacion } from "../../components/dashboard/Central";
 import { ModalTrasladoCentral, ModalUbicacionInicial } from "../../components/dashboard/ModalesCentral";
 
 const POR_PAGINA = 20;
@@ -61,7 +61,6 @@ export default function InventarioCentral() {
         {puede("compras.registrar") && <Link className="btn btn-primary !py-2.5" to="/admin/compras">Compras e identificación</Link>}
       </PageHeader>
       <AvisoConexion consulta={consulta} que="el inventario central" />
-      <MotosPorIdentificar />
 
       <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-5">
         <Stat etiqueta="Unidades" valor={unidades.length} nota={servidor.codubi || servidor.codmod ? "Con el filtro de ubicación o modelo" : "Identificadas en total"} />
