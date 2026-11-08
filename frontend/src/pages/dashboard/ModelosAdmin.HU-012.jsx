@@ -369,9 +369,10 @@ export default function ModelosAdmin() {
             </div>
             {err.specs && <p className="mt-2 text-[12px] font-medium text-acento">{err.specs}</p>}
           </details>
+          {/* «relative»: el check oculto queda dentro de su botón; sin eso, al marcar un color el formulario se desplazaba y quedaba en blanco */}
           <Campo etiqueta="Colores ofrecidos" error={err.colores} className="sm:col-span-2" ayuda="Solo los colores marcados se ven en la web, en Cotizar y en Compras.">
             <div className="flex flex-wrap gap-2">{COLORES.map((c) => (
-              <label key={c} data-color={c} className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] font-medium ${f.colores.includes(c) ? "border-marino-700 bg-marino-700 text-white" : "border-slate-200 dark:border-white/15"}`}>
+              <label key={c} data-color={c} className={`relative inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] font-medium ${f.colores.includes(c) ? "border-marino-700 bg-marino-700 text-white" : "border-slate-200 dark:border-white/15"}`}>
                 <input type="checkbox" className="sr-only" checked={f.colores.includes(c)} onChange={() => setF({ ...f, colores: f.colores.includes(c) ? f.colores.filter((x) => x !== c) : [...f.colores, c] })} />
                 <span className="h-3.5 w-3.5 rounded-full ring-1 ring-black/15" style={{ background: COLOR_HEX[c] }} />{c}</label>
             ))}</div>
