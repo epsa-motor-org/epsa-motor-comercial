@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { CrearSeparacionInput, CrearSeparacionResultado } from '../types/separacion.types';
+import type {
+  CrearSeparacionInput, CrearSeparacionResultado, GuardarTechoSeparacionInput,
+  GuardarTechoSeparacionResultado
+} from '../types/separacion.types';
 
 export async function crearSeparacion(
   db: SupabaseClient,
@@ -17,8 +20,37 @@ export async function crearSeparacion(
     p_rutavouchersep: datos.p_rutavouchersep,
     p_obssep: datos.p_obssep,
     p_ingreso_confirmado: datos.p_ingreso_confirmado,
-    p_idempotenciasep: datos.p_idempotenciasep
+    p_idempotenciasep: datos.p_idempotenciasep,
+    p_decisiontecho: datos.p_decisiontecho,
+    p_codttecomsep: datos.p_codttecomsep
   });
   if (error) throw error;
-  return data as CrearSeparacionResultado;
+  const separacion = data as CrearSeparacionResultado;
+  if (datos.p_decisiontecho === 'Por definir') {
+    return separacion;
+  }
+  try {
+    const techoGuardado = await guardarTechoSeparacion(db, {
+      p_codsep: separacion.codsep,
+      p_decisiontecho: datos.p_decisiontecho,
+      p_codttecomsep: datos.p_codttecomsep
+    });
+    if (!techoGuardado.guardado) throw new Error('La RPC no confirmó el guardado del techo');
+    return { ...separacion, techo: { decision: datos.p_decisiontecho, codtte: datos.p_codttecomsep, guardado: true } };
+  } catch {
+    return { ...separacion, techo: { decision: datos.p_decisiontecho, codtte: datos.p_codttecomsep, guardado: false } };
+  }
+}
+
+export async function guardarTechoSeparacion(
+  db: SupabaseClient,
+  datos: GuardarTechoSeparacionInput
+): Promise<GuardarTechoSeparacionResultado> {
+  const { data, error } = await db.rpc('hu005_guardar_techo_separacion', {
+    p_codsep: datos.p_codsep,
+    p_decisiontecho: datos.p_decisiontecho,
+    p_codttecomsep: datos.p_codttecomsep
+  });
+  if (error) throw error;
+  return data as GuardarTechoSeparacionResultado;
 }

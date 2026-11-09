@@ -24,15 +24,30 @@ interface SeparacionResultado {
   fechaRegistro: string;
   estado: string;
   reutilizada: boolean;
+  techo: { decision: string; codtte: string | null; guardado: boolean };
 }
 interface Operativo { codubi: number | null; codepr: number | null; codtte: number | null; codpro: number | null; estcomuni: string }
+interface Preparacion { estarmado: string; esttecho: string; version: number }
+interface SeparacionCompleta {
+  codsep: string; coduni: string; codcli: string; autor: string; responsable: string;
+  monto: number; medio: string; referencia: string | null; evidencia: string | null;
+  confirmador: string; fechaConfirmacion: string; estado: string; idempotencia: string;
+  decisionSolicitada: string | null; tipoSolicitado: string | null;
+  decision: string | null; tipo: string | null;
+}
 
 const migracionHu026 = readFileSync('supabase/migrations/202610030001_hu026_ubicaciones.sql', 'utf8');
 const migracionHu034 = readFileSync('supabase/migrations/202610040001_hu034_compra_pendiente.sql', 'utf8');
 const migracionHu002 = readFileSync('supabase/migrations/202610060001_hu002_identificacion_unidades.sql', 'utf8');
 const migracionHu007 = readFileSync('supabase/migrations/202610070001_hu007_permisos_rol.sql', 'utf8');
+const migracionHu012Catalogo = readFileSync('supabase/migrations/202610070002_hu012_modelos_publicados.sql', 'utf8');
+const migracionHu004 = readFileSync('supabase/migrations/202610080001_hu004_configuracion_techo.sql', 'utf8');
+const migracionHu009 = readFileSync('supabase/migrations/202610080002_hu009_ficha_modelo.sql', 'utf8');
+const migracionHu033 = readFileSync('supabase/migrations/202610280003_hu033_preparacion_unidad.sql', 'utf8');
+const migracionHu012 = readFileSync('supabase/migrations/202610100003_hu012_admin_modelos.sql', 'utf8');
 const migracionHu005 = readFileSync('supabase/migrations/202611050001_hu005_separacion_moto.sql', 'utf8');
 const migracionHu005Confirmador = readFileSync('supabase/migrations/202611060001_hu005_confirmador_transferencia.sql', 'utf8');
+const migracionHu005TechoPrecio = readFileSync('supabase/migrations/202611080001_hu005_decision_techo_y_precio.sql', 'utf8');
 
 test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y seguridad', async t => {
   const db = new PGlite();
@@ -90,11 +105,13 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       evidencia?: string | null;
       observacion?: string | null;
       confirmado?: boolean | null;
+      decisionTecho?: 'Por definir' | 'Sin techo' | 'Con techo';
+      codtte?: number | null;
       clave?: string;
     } = {}
   ): Promise<SeparacionResultado> {
-    return escalar<SeparacionResultado>(
-      'SELECT public.hu005_crear_separacion($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) r',
+    const resultado = await escalar<SeparacionResultado>(
+      'SELECT public.hu005_crear_separacion($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) r',
       [
         coduni,
         opciones.codcli ?? 1,
@@ -111,8 +128,40 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
           : opciones.evidencia,
         opciones.observacion === undefined ? 'Ingreso verificado en cuenta' : opciones.observacion,
         opciones.confirmado === undefined ? true : opciones.confirmado,
-        opciones.clave ?? randomUUID()
+        opciones.clave ?? randomUUID(),
+        opciones.decisionTecho ?? 'Por definir',
+        opciones.codtte ?? null
       ]
+    );
+    const decisionTecho = opciones.decisionTecho ?? 'Por definir';
+    if (decisionTecho === 'Por definir') return resultado;
+    const techo = await guardarTecho(resultado.codsep, decisionTecho, opciones.codtte ?? null);
+    return { ...resultado, techo: { decision: techo.decision, codtte: techo.codtte, guardado: true } };
+  }
+  async function crearSeparacionSinGuardarTecho(
+    coduni: string,
+    opciones: {
+      decisionTecho?: 'Por definir' | 'Sin techo' | 'Con techo';
+      codtte?: number | null;
+      clave?: string;
+    } = {}
+  ): Promise<SeparacionResultado> {
+    return escalar<SeparacionResultado>(
+      'SELECT public.hu005_crear_separacion($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) r',
+      [
+        coduni, 1, 3, 1, 250.00, '2026-11-04', 'Transferencia', 'OP-QA-1234',
+        'hu005/evidencias/OP-QA-1234.pdf', 'Ingreso verificado en cuenta', true,
+        opciones.clave ?? randomUUID(), opciones.decisionTecho ?? 'Por definir', opciones.codtte ?? null
+      ]
+    );
+  }
+  async function guardarTecho(
+    codsep: string,
+    decision: 'Por definir' | 'Sin techo' | 'Con techo',
+    codtte: number | null
+  ): Promise<{ codsep: string; decision: string; codtte: string | null; guardado: boolean; reutilizada: boolean }> {
+    return escalar(
+      'SELECT public.hu005_guardar_techo_separacion($1,$2,$3) r', [codsep, decision, codtte]
     );
   }
   async function operativo(coduni: string): Promise<Operativo> {
@@ -120,6 +169,23 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       "SELECT jsonb_build_object('codubi',codubi,'codepr',codepr,'codtte',codtte,"
         + "'codpro',codpro,'estcomuni',estcomuni) r FROM public.unidad WHERE coduni=$1",
       [coduni]
+    ));
+  }
+  async function preparacion(coduni: string): Promise<Preparacion> {
+    return administrativo(() => escalar<Preparacion>(
+      'SELECT jsonb_build_object(\'estarmado\',estarmado,\'esttecho\',esttecho,\'version\',versionprep) r '
+        + 'FROM public.preparacionunidad WHERE coduni=$1', [coduni]
+    ));
+  }
+  async function resumenSeparacion(codsep: string): Promise<SeparacionCompleta> {
+    return administrativo(() => escalar<SeparacionCompleta>(
+      "SELECT jsonb_build_object('codsep',codsep::text,'coduni',coduni::text,'codcli',codcli::text,"
+        + "'autor',codusu::text,'responsable',codusuresp::text,'monto',monadesep,'medio',metpagsep,"
+        + "'referencia',refsep,'evidencia',rutavouchersep,'confirmador',codusuconfsep::text,"
+        + "'fechaConfirmacion',fecconfsep,'estado',estsep,'idempotencia',idempotenciasep::text,"
+        + "'decisionSolicitada',decisiontecho_solicitada,'tipoSolicitado',codtte_solicitado::text,"
+        + "'decision',decisiontecho,'tipo',codttecomsep::text) r FROM public.separacion WHERE codsep=$1",
+      [codsep]
     ));
   }
   const error = (codigo: string) => (e: unknown) => (e as ErrorSQL).code === codigo;
@@ -139,12 +205,18 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
     await db.exec(migracionHu034);
     await db.exec(migracionHu002);
     await db.exec(migracionHu007);
+    await db.exec(migracionHu012Catalogo);
+    await db.exec(migracionHu004);
+    await db.exec(migracionHu009);
+    await db.exec(migracionHu033);
+    await db.exec(migracionHu012);
     await db.exec("ALTER TABLE public.separacion ENABLE ROW LEVEL SECURITY; "
       + "ALTER TABLE public.venta ENABLE ROW LEVEL SECURITY; "
       + "GRANT ALL ON public.separacion,public.venta TO authenticated; "
       + "GRANT USAGE,SELECT ON SEQUENCE public.separacion_codsep_seq TO authenticated;");
     await db.exec(migracionHu005);
     await db.exec(migracionHu005Confirmador);
+    await db.exec(migracionHu005TechoPrecio);
 
     const authRows = uuids.map(id => "('" + id + "')").join(',');
     await db.exec("INSERT INTO auth.users(id) VALUES " + authRows + "; "
@@ -158,7 +230,7 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       + "WHEN u.id='" + uuids[2] + "' OR u.id='" + uuids[3] + "' THEN 'Vendedor' "
       + "WHEN u.id='" + uuids[4] + "' THEN 'Gerente' ELSE 'Auxiliar' END; "
       + "INSERT INTO public.tipomotocar(nomtmo) VALUES ('Modelo QA'); "
-      + "INSERT INTO public.modelo(codtmo,nommod,desmod,carmod) VALUES (1,'Modelo QA','Descripción','Características'); "
+      + "INSERT INTO public.modelo(codtmo,nommod,desmod,carmod,premod) VALUES (1,'Modelo QA','Descripción','Características',15000); "
       + "INSERT INTO public.tipodocumento(nomtdo) VALUES ('DNI QA'); "
       + "INSERT INTO public.cliente(codtdo,numdoccli,nomcli,estcli) "
       + "VALUES (1,'CLI-ACTIVO','Cliente activo QA',true),(1,'CLI-INACTIVO','Cliente inactivo QA',false); "
@@ -256,6 +328,252 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       assert.equal(resultado.ingresoConfirmado, true);
     });
 
+    await t.test('las tres decisiones comerciales de techo se persisten separadas de la configuración física', async () => {
+      await login(1);
+      const porDefinirUnidad = await crearUnidad('TECHO-POR-DEFINIR');
+      const porDefinir = await crearSeparacion(porDefinirUnidad, { decisionTecho: 'Por definir' });
+      assert.deepEqual(porDefinir.techo, { decision: 'Por definir', codtte: null, guardado: true });
+      const mismoPorDefinir = await guardarTecho(porDefinir.codsep, 'Por definir', null);
+      assert.equal(mismoPorDefinir.guardado, true);
+      assert.equal(mismoPorDefinir.reutilizada, true);
+
+      const sinTechoUnidad = await crearUnidad('TECHO-SIN-TECHO');
+      await administrativo(() => db.query(
+        "UPDATE public.preparacionunidad SET estarmado='Pendiente',esttecho='Pendiente' WHERE coduni=$1",
+        [sinTechoUnidad]
+      ));
+      const unidadAntes = await operativo(sinTechoUnidad);
+      const preparacionAntes = await preparacion(sinTechoUnidad);
+      const sinTecho = await crearSeparacion(sinTechoUnidad, { decisionTecho: 'Sin techo' });
+      assert.deepEqual(sinTecho.techo, { decision: 'Sin techo', codtte: null, guardado: true });
+      assert.notEqual(sinTecho.techo.decision, porDefinir.techo.decision);
+      const unidadDespues = await operativo(sinTechoUnidad);
+      assert.deepEqual({ ...unidadDespues, estcomuni: unidadAntes.estcomuni }, unidadAntes);
+      assert.deepEqual(await preparacion(sinTechoUnidad), preparacionAntes,
+        'la elección comercial Sin techo no convierte la preparación en lista');
+
+      const conTechoUnidad = await crearUnidad('TECHO-CON-TECHO');
+      const conTecho = await crearSeparacion(conTechoUnidad, { decisionTecho: 'Con techo', codtte: 5 });
+      assert.deepEqual(conTecho.techo, { decision: 'Con techo', codtte: '5', guardado: true });
+      assert.equal((await operativo(conTechoUnidad)).codtte, 1,
+        'el tipo comercial elegido no cambia unidad.codtte físico');
+    });
+
+    await t.test('Por definir se guarda como estado resoluble y permite decidir Sin techo o Con techo', async () => {
+      await login(1);
+      const unidadSin = await crearUnidad('RESOLVER-SIN-TECHO');
+      await administrativo(() => db.query(
+        "UPDATE public.preparacionunidad SET estarmado='Pendiente',esttecho='Pendiente' WHERE coduni=$1", [unidadSin]
+      ));
+      const unidadSinAntes = await operativo(unidadSin);
+      const preparacionSinAntes = await preparacion(unidadSin);
+      const separacionSin = await crearSeparacion(unidadSin, { decisionTecho: 'Por definir' });
+      assert.equal(separacionSin.estado, 'Activa');
+      assert.deepEqual(separacionSin.techo, { decision: 'Por definir', codtte: null, guardado: true });
+      const antesSin = await resumenSeparacion(separacionSin.codsep);
+      const guardadoSin = await guardarTecho(separacionSin.codsep, 'Sin techo', null);
+      assert.equal(guardadoSin.guardado, true);
+      assert.equal(guardadoSin.reutilizada, false);
+      const despuesSin = await resumenSeparacion(separacionSin.codsep);
+      assert.equal(despuesSin.decisionSolicitada, 'Por definir');
+      assert.equal(despuesSin.tipoSolicitado, null);
+      assert.equal(despuesSin.decision, 'Sin techo');
+      assert.equal(despuesSin.tipo, null);
+      assert.equal(despuesSin.codsep, antesSin.codsep);
+      assert.equal(despuesSin.monto, antesSin.monto);
+      assert.equal(despuesSin.autor, antesSin.autor);
+      assert.equal(despuesSin.confirmador, antesSin.confirmador);
+      assert.equal(despuesSin.decisionSolicitada, antesSin.decisionSolicitada,
+        'la decisión original del POST se conserva para los replays idempotentes');
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidadSin]
+      )), 1);
+      assert.equal((await operativo(unidadSin)).codtte, unidadSinAntes.codtte);
+      assert.equal((await operativo(unidadSin)).codubi, unidadSinAntes.codubi);
+      assert.equal((await operativo(unidadSin)).estcomuni, 'Separada');
+      assert.deepEqual(await preparacion(unidadSin), preparacionSinAntes);
+
+      const unidadCon = await crearUnidad('RESOLVER-CON-TECHO');
+      const separacionCon = await crearSeparacion(unidadCon, { decisionTecho: 'Por definir' });
+      const antesCon = await resumenSeparacion(separacionCon.codsep);
+      const guardadoCon = await guardarTecho(separacionCon.codsep, 'Con techo', 5);
+      assert.equal(guardadoCon.guardado, true);
+      assert.equal(guardadoCon.reutilizada, false);
+      const despuesCon = await resumenSeparacion(separacionCon.codsep);
+      assert.equal(despuesCon.decisionSolicitada, 'Por definir');
+      assert.equal(despuesCon.tipoSolicitado, null);
+      assert.equal(despuesCon.decision, 'Con techo');
+      assert.equal(despuesCon.tipo, '5');
+      assert.equal(despuesCon.monto, antesCon.monto);
+      assert.equal(despuesCon.estado, antesCon.estado);
+      assert.equal(despuesCon.autor, antesCon.autor);
+      assert.equal(despuesCon.confirmador, antesCon.confirmador);
+      assert.equal(despuesCon.fechaConfirmacion, antesCon.fechaConfirmacion);
+      assert.equal(despuesCon.codsep, antesCon.codsep);
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidadCon]
+      )), 1);
+      assert.equal((await operativo(unidadCon)).codtte, 1,
+        'resolver la decisión no cambia unidad.codtte');
+    });
+
+    await t.test('repetir el POST original Por definir tras resolver el techo recupera la separación existente', async () => {
+      await login(1);
+      for (const [etiqueta, decision, codtte] of [
+        ['REPLAY-POR-DEFINIR-SIN', 'Sin techo', null],
+        ['REPLAY-POR-DEFINIR-CON', 'Con techo', 5]
+      ] as const) {
+        const unidad = await crearUnidad(etiqueta);
+        const clave = randomUUID();
+        const inicial = await crearSeparacion(unidad, { decisionTecho: 'Por definir', clave });
+        assert.equal(inicial.techo.decision, 'Por definir');
+        const inicialDb = await resumenSeparacion(inicial.codsep);
+        assert.equal(inicialDb.decisionSolicitada, 'Por definir');
+        assert.equal(inicialDb.tipoSolicitado, null);
+
+        await guardarTecho(inicial.codsep, decision, codtte);
+        const replay = await crearSeparacion(unidad, { decisionTecho: 'Por definir', clave });
+        assert.equal(replay.codsep, inicial.codsep);
+        assert.equal(replay.reutilizada, true);
+        assert.deepEqual(replay.techo, { decision, codtte: codtte === null ? null : String(codtte), guardado: true });
+
+        const finalDb = await resumenSeparacion(inicial.codsep);
+        assert.equal(finalDb.decisionSolicitada, 'Por definir');
+        assert.equal(finalDb.tipoSolicitado, null);
+        assert.equal(finalDb.decision, decision);
+        assert.equal(finalDb.tipo, codtte === null ? null : String(codtte));
+        assert.equal(finalDb.monto, 250);
+        assert.equal(await administrativo(() => escalar<number>(
+          'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidad]
+        )), 1, 'el replay no crea otra separación ni otro registro del adelanto');
+        assert.equal(await administrativo(() => escalar<number>(
+          'SELECT count(*)::int r FROM public.separacion WHERE idempotenciasep=$1', [clave]
+        )), 1);
+      }
+    });
+
+    await t.test('resolver Por definir con tipo inválido/inactivo falla y deja la elección sin resolver', async () => {
+      await login(1);
+      const unidad = await crearUnidad('RESOLVER-TECHO-INVALIDO');
+      const separacion = await crearSeparacion(unidad, { decisionTecho: 'Por definir' });
+      await administrativo(() => db.query("INSERT INTO public.tipotecho(nomtte,esttte) VALUES ('Tipo inactivo al resolver QA',false)"));
+      const tipoInactivo = await administrativo(() => escalar<number>(
+        "SELECT codtte r FROM public.tipotecho WHERE nomtte='Tipo inactivo al resolver QA'"
+      ));
+      await assert.rejects(guardarTecho(separacion.codsep, 'Con techo', 999), error('PT435'));
+      await assert.rejects(guardarTecho(separacion.codsep, 'Con techo', tipoInactivo), error('PT435'));
+      const actual = await resumenSeparacion(separacion.codsep);
+      assert.equal(actual.decision, 'Por definir');
+      assert.equal(actual.tipo, null);
+      assert.equal(actual.decisionSolicitada, 'Por definir');
+      assert.equal((await operativo(unidad)).estcomuni, 'Separada');
+    });
+
+    await t.test('una decisión final de techo es inmutable y repetirla es idempotente', async () => {
+      await login(1);
+      const unidadSin = await crearUnidad('FINAL-SIN-TECHO');
+      const separacionSin = await crearSeparacion(unidadSin, { decisionTecho: 'Sin techo' });
+      await assert.rejects(guardarTecho(separacionSin.codsep, 'Con techo', 5), error('PT437'));
+      await assert.rejects(guardarTecho(separacionSin.codsep, 'Por definir', null), error('PT437'));
+      const igualSin = await guardarTecho(separacionSin.codsep, 'Sin techo', null);
+      assert.equal(igualSin.guardado, true);
+      assert.equal(igualSin.reutilizada, true);
+
+      const unidadCon = await crearUnidad('FINAL-CON-TECHO');
+      const separacionCon = await crearSeparacion(unidadCon, { decisionTecho: 'Con techo', codtte: 5 });
+      await assert.rejects(guardarTecho(separacionCon.codsep, 'Con techo', 4), error('PT437'));
+      await assert.rejects(guardarTecho(separacionCon.codsep, 'Sin techo', null), error('PT437'));
+      await assert.rejects(guardarTecho(separacionCon.codsep, 'Por definir', null), error('PT437'));
+      const igualCon = await guardarTecho(separacionCon.codsep, 'Con techo', 5);
+      assert.equal(igualCon.guardado, true);
+      assert.equal(igualCon.reutilizada, true);
+    });
+
+    await t.test('tipo inexistente/inactivo y decisiones contradictorias se rechazan sin crear la separación', async () => {
+      await login(1);
+      const unidad = await crearUnidad('TECHO-INVALIDO');
+      await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Con techo', codtte: 999 }), error('PT435'));
+      await administrativo(() => db.query("INSERT INTO public.tipotecho(nomtte,esttte) VALUES ('Techo inactivo QA',false)"));
+      const tipoInactivo = await administrativo(() => escalar<number>(
+        "SELECT codtte r FROM public.tipotecho WHERE nomtte='Techo inactivo QA'"
+      ));
+      await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Con techo', codtte: tipoInactivo }), error('PT435'));
+      await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Con techo' }), error('PT400'));
+      await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Sin techo', codtte: 5 }), error('PT400'));
+      await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Decisión inválida' as 'Sin techo' }), error('PT400'));
+      assert.equal((await operativo(unidad)).estcomuni, 'No disponible');
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidad]
+      )), 0);
+    });
+
+    await t.test('si falla el segundo paso, la separación queda activa y el reintento solo guarda el techo', async () => {
+      await login(1);
+      const unidad = await crearUnidad('TECHO-REINTENTO');
+      const unidadAntes = await operativo(unidad);
+      const prepAntes = await preparacion(unidad);
+      const separacion = await crearSeparacionSinGuardarTecho(unidad, { decisionTecho: 'Con techo', codtte: 5 });
+      assert.equal(separacion.techo?.guardado, false);
+      assert.equal((await operativo(unidad)).estcomuni, 'Separada');
+
+      await administrativo(() => db.exec("CREATE FUNCTION public.hu005_test_falla_guardar_techo() "
+        + "RETURNS trigger LANGUAGE plpgsql AS $$ "
+        + "BEGIN RAISE EXCEPTION USING ERRCODE='PT499', MESSAGE='Fallo inducido por test'; END $$; "
+        + "CREATE TRIGGER hu005_test_falla_guardar_techo BEFORE UPDATE OF decisiontecho ON public.separacion "
+        + "FOR EACH ROW EXECUTE FUNCTION public.hu005_test_falla_guardar_techo();"));
+      await assert.rejects(guardarTecho(separacion.codsep, 'Con techo', 5), error('PT499'));
+      await administrativo(() => db.exec('DROP TRIGGER hu005_test_falla_guardar_techo ON public.separacion; '
+        + 'DROP FUNCTION public.hu005_test_falla_guardar_techo();'));
+
+      const pendiente = await administrativo(() => escalar<{ estsep: string; decisiontecho: string | null; codttecomsep: string | null }>(
+        "SELECT jsonb_build_object('estsep',estsep,'decisiontecho',decisiontecho,'codttecomsep',codttecomsep::text) r "
+          + 'FROM public.separacion WHERE codsep=$1', [separacion.codsep]
+      ));
+      assert.deepEqual(pendiente, { estsep: 'Activa', decisiontecho: null, codttecomsep: null });
+      await assert.rejects(guardarTecho(separacion.codsep, 'Sin techo', null), error('PT431'),
+        'el reintento de una elección definitiva pendiente debe conservar el payload original');
+      const totalAntesReintento = await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidad]
+      ));
+      const guardado = await guardarTecho(separacion.codsep, 'Con techo', 5);
+      assert.equal(guardado.guardado, true);
+      assert.equal(guardado.reutilizada, false);
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidad]
+      )), totalAntesReintento);
+      assert.deepEqual(await operativo(unidad), { ...unidadAntes, estcomuni: 'Separada' });
+      assert.deepEqual(await preparacion(unidad), prepAntes);
+      assert.equal((await guardarTecho(separacion.codsep, 'Con techo', 5)).reutilizada, true);
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidad]
+      )), 1, 'repetir el guardado no duplica separación ni adelanto');
+      await assert.rejects(guardarTecho(separacion.codsep, 'Sin techo', null), error('PT437'));
+    });
+
+    await t.test('el monto igual al precio de lista se acepta; uno mayor revierte separación y unidad', async () => {
+      await login(1);
+      await administrativo(() => db.query('UPDATE public.modelo SET premod=250 WHERE codmod=1'));
+      const unidadMaxima = await crearUnidad('MONTO-IGUAL');
+      const valida = await crearSeparacion(unidadMaxima, { monto: 250 });
+      assert.equal(valida.monto, 250);
+
+      const unidadExcedida = await crearUnidad('MONTO-SUPERIOR');
+      const antes = await operativo(unidadExcedida);
+      await assert.rejects(crearSeparacion(unidadExcedida, { monto: 250.01 }), error('PT434'));
+      assert.deepEqual(await operativo(unidadExcedida), antes);
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidadExcedida]
+      )), 0);
+
+      await administrativo(() => db.query('UPDATE public.modelo SET premod=NULL WHERE codmod=1'));
+      const unidadSinPrecio = await crearUnidad('MONTO-SIN-PRECIO');
+      await assert.rejects(crearSeparacion(unidadSinPrecio), error('PT436'));
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidadSinPrecio]
+      )), 0);
+      await administrativo(() => db.query('UPDATE public.modelo SET premod=15000 WHERE codmod=1'));
+    });
+
     await t.test('monto, fecha, medio y referencia inválidos se rechazan antes de escribir', async () => {
       const unidad = await crearUnidad('VALIDACION');
       await login(1);
@@ -333,6 +651,8 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       await assert.rejects(crearSeparacion(unidad, { clave, monto: 251 }), error('PT431'));
       await assert.rejects(crearSeparacion(unidad, { clave, evidencia: 'hu005/evidencias/otra.pdf' }), error('PT431'));
       await assert.rejects(crearSeparacion(unidad, { clave, confirmador: 5 }), error('PT431'));
+      await assert.rejects(crearSeparacion(unidad, { clave, decisionTecho: 'Sin techo' }), error('PT431'));
+      await assert.rejects(crearSeparacion(unidad, { clave, decisionTecho: 'Con techo', codtte: 5 }), error('PT431'));
       await login(2);
       await assert.rejects(crearSeparacion(unidad, { clave }), error('PT431'));
       assert.equal(await administrativo(() => escalar<number>(
@@ -388,12 +708,21 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       )), true);
       assert.ok(await administrativo(() => escalar<string | null>(
         "SELECT pg_catalog.to_regprocedure("
-          + "'public.hu005_crear_separacion(bigint,bigint,bigint,bigint,numeric,date,text,text,text,text,boolean,uuid)')::text r"
+          + "'public.hu005_crear_separacion(bigint,bigint,bigint,bigint,numeric,date,text,text,text,text,boolean,uuid,text,bigint)')::text r"
       )));
       assert.equal(await administrativo(() => escalar<string | null>(
         "SELECT pg_catalog.to_regprocedure("
-          + "'public.hu005_crear_separacion(bigint,bigint,bigint,numeric,date,text,text,text,text,boolean,uuid)')::text r"
+          + "'public.hu005_crear_separacion(bigint,bigint,bigint,bigint,numeric,date,text,text,text,text,boolean,uuid)')::text r"
       )), null);
+      assert.ok(await administrativo(() => escalar<string | null>(
+        "SELECT pg_catalog.to_regprocedure("
+          + "'public.hu005_guardar_techo_separacion(bigint,text,bigint)')::text r"
+      )));
+      assert.equal(await administrativo(() => escalar<boolean>(
+        "SELECT has_function_privilege('authenticated',"
+          + "'public.hu005_crear_separacion_base(bigint,bigint,bigint,bigint,numeric,date,text,text,text,text,boolean,uuid)',"
+          + "'EXECUTE') r"
+      )), false);
 
       const unidad = await crearUnidad('DIRECTO');
       await login(1);

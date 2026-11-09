@@ -1,3 +1,9 @@
+export type DecisionTechoSeparacion = 'Por definir' | 'Sin techo' | 'Con techo';
+
+export type TechoSeparacionRequest =
+  | { decision: 'Con techo'; codtte: number }
+  | { decision: 'Por definir' | 'Sin techo'; codtte?: never };
+
 export interface CrearSeparacionRequest {
   codcli: number;
   codusuResponsable: number;
@@ -9,6 +15,7 @@ export interface CrearSeparacionRequest {
   rutaEvidencia?: string | null;
   observacion?: string | null;
   ingresoConfirmado: boolean;
+  techo: TechoSeparacionRequest;
 }
 
 export interface CrearSeparacionInput {
@@ -24,6 +31,8 @@ export interface CrearSeparacionInput {
   p_obssep: string | null;
   p_ingreso_confirmado: boolean;
   p_idempotenciasep: string;
+  p_decisiontecho: DecisionTechoSeparacion;
+  p_codttecomsep: string | null;
 }
 
 export interface CrearSeparacionResultado {
@@ -43,6 +52,27 @@ export interface CrearSeparacionResultado {
   fechaConfirmacion: string;
   fechaRegistro: string;
   estado: string;
+  reutilizada: boolean;
+  techo: TechoSeparacionResultado;
+}
+
+export interface TechoSeparacionResultado {
+  decision: DecisionTechoSeparacion;
+  codtte: string | null;
+  guardado: boolean;
+}
+
+export interface GuardarTechoSeparacionInput {
+  p_codsep: string;
+  p_decisiontecho: DecisionTechoSeparacion;
+  p_codttecomsep: string | null;
+}
+
+export interface GuardarTechoSeparacionResultado {
+  codsep: string;
+  decision: DecisionTechoSeparacion;
+  codtte: string | null;
+  guardado: true;
   reutilizada: boolean;
 }
 
