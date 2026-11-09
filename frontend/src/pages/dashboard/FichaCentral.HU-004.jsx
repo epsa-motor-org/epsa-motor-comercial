@@ -3,7 +3,7 @@
 // movimientos y avances; el vendedor solo consulta. La ficha se actualiza sola.
 // HU-005: los tres roles comerciales separan la moto desde aquí y ven su separación activa.
 import { useEffect, useState } from "react";
-import { useLocation, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Link } from "../../components/dashboard/LinkPanel";
 import { useAuth } from "../../context/AuthContext";
 import { MAX_DETALLE_TECHO, TIPOS_TECHO } from "../../data/mockData";
@@ -83,7 +83,7 @@ function FichaCentral({ id }) {
     <div>
       <PageHeader titulo={`${u.nommod}${u.nummotuni ? ` · motor ${u.nummotuni}` : ""}`} subtitulo={`${capital(u.coluni) || "Sin color"}${u.chauni ? ` · chasis ${u.chauni}` : ""} · unidad N° ${u.coduni}`}>
         <BarraActualizacion consulta={consulta} />
-        <Link to="/admin/inventario" className="btn btn-secondary !py-2.5">Inventario</Link>
+        <BotonVolver />
       </PageHeader>
       <AvisoConexion consulta={consulta} que="la ficha de la unidad" />
       <div className="mb-6 grid gap-4 md:grid-cols-3" data-ejes>
@@ -91,7 +91,7 @@ function FichaCentral({ id }) {
         <Card data-eje="preparacion"><p className="text-[12px] font-semibold text-slate-400">Preparación</p><div className="mt-1.5"><PillPreparacion preparacion={p} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{prep.nota || `Techo: ${t.config}`}</p></Card>
         <Card data-eje="comercial"><p className="text-[12px] font-semibold text-slate-400">Situación comercial</p><div className="mt-1.5"><PillComercial comercial={u.comercial} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{textoSituacion}</p>{separa && sePuedeSeparar(u) && <button className="btn btn-primary mt-3 !py-2 text-[13px] sm:ml-2" onClick={() => setSeparando(true)} data-separar-ficha>Separar esta moto</button>}</Card>
       </div>
-      {u.comercial === "Separada" && <div className="mb-6"><SeparacionActivaCard unidad={u} /></div>}
+      {u.comercial === "Separada" && <div className="mb-6"><SeparacionActivaCard unidad={u} puedeTecho={separa} onCambio={recargar} /></div>}
       <div className="mb-6"><PreparacionUnidadCard unidad={u} gestiona={gestiona} onCambio={recargar} /></div>
       <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
         <MovimientosUnidad unidad={u} gestiona={gestiona} ubicaciones={ubicaciones} onCambio={recargar} />
@@ -100,6 +100,15 @@ function FichaCentral({ id }) {
       {separando && <SepararMotoCentral unidad={u} onClose={() => setSeparando(false)} onHecho={recargar} onConflicto={recargar} />}
     </div>
   );
+}
+
+// Volver a la lista de donde se abrió la ficha (Inventario o Disponibilidad), con sus filtros tal como estaban.
+// Si la ficha se abrió directo (enlace o recarga), lleva al Inventario.
+function BotonVolver() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const volver = () => (location.key !== "default" ? navigate(-1) : navigate("/admin/inventario"));
+  return <button type="button" className="btn btn-secondary !py-2.5" onClick={volver} data-volver>Volver a la lista</button>;
 }
 
 // HU-004 · Tipo de techo y proveedor (la API de Michelle; el avance de instalación es de HU-033)

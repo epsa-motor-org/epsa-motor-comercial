@@ -12,25 +12,33 @@ export interface FormularioSeparacion {
   responsables: ParticipanteSeparacion[];
   gerentes: ParticipanteSeparacion[];
   tiposTecho: TipoTechoSeparacion[];
+  preciosLista: Record<string, number>;
 }
 
 export interface TipoTechoSeparacion {
   codtte: string;
   nombre: string;
   requiereInstalacion: boolean;
+  /** true solo para «Sin techo»: el tipo que no lleva instalación ni proveedor */
+  sinTecho?: boolean;
 }
+
+export type DecisionTecho = 'Por definir' | 'Sin techo' | 'Con techo';
 
 export interface TechoElegido {
   coduni: string;
+  codsep: string;
+  decision: DecisionTecho;
   techo: TipoTechoSeparacion;
   preparacion: unknown;
 }
 
+// Desde el 8 de noviembre el comprador se registra sin documento: tipo y número llegan en null
 export interface CompradorSeparacion {
   codcli: string;
-  codtdo: string;
-  tipoDocumento: string;
-  numeroDocumento: string;
+  codtdo: string | null;
+  tipoDocumento: string | null;
+  numeroDocumento: string | null;
   nombres: string;
   apellidoPaterno: string | null;
   apellidoMaterno: string | null;
@@ -41,13 +49,10 @@ export interface CompradorSeparacion {
 }
 
 export interface RegistrarCompradorInput {
-  p_codtdo: string;
-  p_numdoc: string;
   p_nombres: string;
-  p_apellido_paterno: string | null;
+  p_apellido_paterno: string;
   p_apellido_materno: string | null;
   p_telefono: string;
-  p_correo: string;
 }
 
 export type FormatoEvidencia = 'jpeg' | 'png' | 'webp' | 'pdf';
@@ -77,6 +82,14 @@ export interface SeparacionActiva {
   fechaConfirmacion: string | null;
   fechaRegistro: string;
   estado: string;
+  decisionTecho: {
+    decision: DecisionTecho;
+    codtte: string | null;
+    nombre: string | null;
+    requiereInstalacion: boolean;
+    fecha: string | null;
+    por: string | null;
+  };
   techo: {
     codtte: string | null;
     nombre: string | null;

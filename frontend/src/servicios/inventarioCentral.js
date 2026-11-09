@@ -21,9 +21,10 @@ export function ubicacionDe(u) {
 // Techo: configuración (HU-004) y avance de su instalación (HU-033), por separado
 export function techoDe(p) {
   const t = p?.techo || {};
-  // La moto se vende con o sin techo: sin un techo elegido por el cliente, se muestra «Sin techo»
-  const config = t.configuracion || "Sin techo";
-  const avance = t.configuracion ? t.avance || "Pendiente" : "No requiere";
+  // La moto se vende con o sin techo: sin un techo elegido, se muestra «Sin techo». Si está separada y el comprador
+  // aún no decide, «Por definir» (HU-005)
+  const config = t.configuracion || (t.porDefinir ? "Por definir" : "Sin techo");
+  const avance = t.configuracion ? t.avance || "Pendiente" : t.porDefinir ? "Por definir" : "No requiere";
   return {
     config, proveedor: t.proveedor || "", detalle: t.detalle || "", avance,
     requiereInstalacion: config !== "Sin techo" && !["Por definir", "No requiere"].includes(avance),
