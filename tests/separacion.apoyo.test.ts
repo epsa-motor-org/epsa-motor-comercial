@@ -109,67 +109,62 @@ test('HU-005 apoyo: formulario para los tres roles comerciales y nadie más', as
     gerentes: [{ codusu: '4', nombre: 'Flavio' }] }, error: null
 })));
 
-test('HU-005 apoyo: busca comprador por documento normalizado y responde null si no existe', async () => entorno(async (base, llamadas) => {
-  const encontrado = await pedir(`${base}/api/separaciones/compradores?numero=${encodeURIComponent(' 4587-9632 ')}`);
-  assert.equal(encontrado.status, 200);
-  assert.deepEqual(encontrado.body.data, comprador);
-  const vacio = await pedir(`${base}/api/separaciones/compradores?numero=99999999`);
-  assert.equal(vacio.status, 200);
-  assert.equal(vacio.body.data, null);
-  assert.equal((await pedir(`${base}/api/separaciones/compradores`)).status, 400);
-  assert.equal((await pedir(`${base}/api/separaciones/compradores?numero=12`)).status, 400);
-  assert.equal((await pedir(`${base}/api/separaciones/compradores?numero=45879632`, 'auxiliar')).status, 403);
-  assert.deepEqual(llamadas.map(l => l.parametros), [{ p_numdoc: '45879632' }, { p_numdoc: '99999999' }]);
-}, (_nombre, parametros) => ({
-  data: (parametros as { p_numdoc: string }).p_numdoc === '45879632' ? comprador : null, error: null
-})));
+test('HU-005 apoyo: ya no se busca al comprador por documento', async () => entorno(async (base, llamadas) => {
+  const r = await fetch(`${base}/api/separaciones/compradores?numero=45879632`, { headers: { Authorization: 'Bearer vendedor' } });
+  assert.equal(r.status, 404);
+  assert.equal(llamadas.length, 0);
+}));
 
-test('HU-005 apoyo: registra comprador nuevo (201), devuelve el existente (200) y valida el cuerpo', async () => entorno(async (base, llamadas) => {
-  const nuevo = { codtdo: 1, numeroDocumento: '45879632', nombres: '  Rosa   ', apellidoPaterno: 'Quispe',
-    apellidoMaterno: 'Huamán', telefono: '987 654-321', correo: ' Rosa.Q@Correo.PE ' };
+test('HU-005 apoyo: registra comprador sin documento (201), devuelve el existente (200) y valida el cuerpo', async () => entorno(async (base, llamadas) => {
+  const nuevo = { nombres: '  Rosa   María ', apellidoPaterno: 'Quispe', apellidoMaterno: 'Huamán', telefono: '987 654-321' };
   const creado = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json(nuevo));
   assert.equal(creado.status, 201);
   assert.equal((creado.body.data as { existente: boolean }).existente, false);
   assert.deepEqual(llamadas[0], {
-    nombre: 'hu005_registrar_cliente', token: 'vendedor',
-    parametros: { p_codtdo: '1', p_numdoc: '45879632', p_nombres: 'Rosa', p_apellido_paterno: 'Quispe',
-      p_apellido_materno: 'Huamán', p_telefono: '987654321', p_correo: 'rosa.q@correo.pe' }
+    nombre: 'hu005_registrar_comprador', token: 'vendedor',
+    parametros: { p_nombres: 'Rosa María', p_apellido_paterno: 'Quispe', p_apellido_materno: 'Huamán', p_telefono: '987654321' }
   });
-  const repetido = await pedir(`${base}/api/separaciones/compradores`, 'gerente', json({ ...nuevo, numeroDocumento: '11111111' }));
+  const repetido = await pedir(`${base}/api/separaciones/compradores`, 'gerente', json({ ...nuevo, telefono: '911111111' }));
   assert.equal(repetido.status, 200);
   assert.equal((repetido.body.data as { existente: boolean }).existente, true);
+  const sinMaterno = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json({ ...nuevo, apellidoMaterno: null }));
+  assert.equal(sinMaterno.status, 201);
+  assert.equal((llamadas[2]!.parametros as { p_apellido_materno: unknown }).p_apellido_materno, null);
 
-  for (const malo of [{ ...nuevo, codtdo: 'DNI' }, { ...nuevo, nombres: '' }, { ...nuevo, numeroDocumento: 'a' },
-    { ...nuevo, estcli: false }, { ...nuevo, telefono: 'x'.repeat(21) }, { ...nuevo, telefono: '512345678' },
-    { ...nuevo, telefono: '98765432' }, { ...nuevo, telefono: '9876543210' }, { ...nuevo, telefono: null },
-    { ...nuevo, correo: null }, { ...nuevo, correo: 'sin-arroba' }, []]) {
-    assert.equal((await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json(malo))).status, 400);
+  for (const malo of [{ ...nuevo, nombres: '' }, { ...nuevo, nombres: 'R2D2' }, { ...nuevo, apellidoPaterno: null },
+    { ...nuevo, apellidoPaterno: 'Q' }, { ...nuevo, apellidoMaterno: 'Huamán 3' }, { ...nuevo, codtdo: 1 },
+    { ...nuevo, nombres: 'Rosa-María' }, { ...nuevo, apellidoPaterno: "O'Brien" }, { ...nuevo, apellidoMaterno: 'Huamán.' },
+    { ...nuevo, nombres: 'Rosa@' }, { ...nuevo, apellidoPaterno: 'Quispe!' },
+    { ...nuevo, numeroDocumento: '45879632' }, { ...nuevo, correo: 'rosa@correo.pe' }, { ...nuevo, telefono: 'x'.repeat(21) },
+    { ...nuevo, telefono: '512345678' }, { ...nuevo, telefono: '98765432' }, { ...nuevo, telefono: '9876543210' },
+    { ...nuevo, telefono: '999999999' }, { ...nuevo, telefono: null }, []]) {
+    assert.equal((await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json(malo))).status, 400, JSON.stringify(malo));
   }
-  assert.equal(llamadas.length, 2);
+  assert.equal(llamadas.length, 3);
 }, (_nombre, parametros) => ({
-  data: { ...comprador, existente: (parametros as { p_numdoc: string }).p_numdoc === '11111111' }, error: null
+  data: { ...comprador, codtdo: null, tipoDocumento: null, numeroDocumento: null,
+    existente: (parametros as { p_telefono: string }).p_telefono === '911111111' }, error: null
 })));
 
 test('HU-005 apoyo: los errores de la base no filtran detalles internos', async () => entorno(async base => {
-  const valido = { codtdo: 1, numeroDocumento: '4587963', nombres: 'Rosa', apellidoPaterno: 'Quispe',
-    telefono: '987654321', correo: 'rosa@correo.pe' };
+  const valido = { nombres: 'Rosa', apellidoPaterno: 'Quispe', apellidoMaterno: null, telefono: '987654321' };
   const r = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json(valido));
   assert.equal(r.status, 400);
-  assert.equal(r.body.message, 'El número no corresponde al tipo de documento');
-  const otro = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json({ ...valido, numeroDocumento: '22222222' }));
+  assert.equal(r.body.message, 'Celular inválido');
+  const otro = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json({ ...valido, telefono: '922222222' }));
   assert.equal(otro.status, 400);
   assert.equal(otro.body.message, 'Los datos del comprador no son válidos');
-  const caido = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json({ ...valido, numeroDocumento: '33333333' }));
+  const caido = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json({ ...valido, telefono: '933333333' }));
   assert.equal(caido.status, 500);
   assert.equal(caido.body.message, 'Error interno al preparar la separación');
   assert.doesNotMatch(JSON.stringify(caido.body), /SQL privado|secreto/);
-  const sinPermiso = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json({ ...valido, numeroDocumento: '44444444' }));
+  const sinPermiso = await pedir(`${base}/api/separaciones/compradores`, 'vendedor', json({ ...valido, telefono: '944444444' }));
   assert.equal(sinPermiso.status, 403);
 }, (_nombre, parametros) => {
-  const numero = (parametros as { p_numdoc: string }).p_numdoc;
-  if (numero === '4587963') return errorRPC('PT400', 'El número no corresponde al tipo de documento');
-  if (numero === '22222222') return errorRPC('PT400', 'detalle SQL privado');
-  if (numero === '33333333') return errorRPC('XX000');
+  const telefono = (parametros as { p_telefono: string }).p_telefono;
+  if (telefono === '987654321') return errorRPC('PT400', 'Celular inválido');
+  if (telefono === '922222222') return errorRPC('PT400', 'detalle SQL privado');
+  if (telefono === '933333333') return errorRPC('XX000');
   return errorRPC('42501');
 }));
 
@@ -281,3 +276,42 @@ test('HU-005 apoyo: registra el techo que eligió el cliente de una moto separad
   if (p_codtte === '99') return errorRPC('PT400', 'Tipo de techo inexistente o inactivo');
   return { data: { coduni: p_coduni, techo: { codtte: '2', nombre: 'Lona', requiereInstalacion: true }, preparacion: {} }, error: null };
 }));
+
+test('HU-005 apoyo: un adelanto mayor al precio de lista responde 422 con un mensaje claro', async () => entorno(async base => {
+  const r = await pedir(`${base}/api/unidades/12/separaciones`, 'vendedor', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'c9a1e6b2-3f4d-4a5b-8c7d-1e2f3a4b5c6d' },
+    body: JSON.stringify({
+      codcli: 1, codusuResponsable: 6, monto: 5000000, fechaPago: '2026-11-08', medioPago: 'Efectivo',
+      referencia: null, rutaEvidencia: null, observacion: 'Recibido en tienda', ingresoConfirmado: true
+    })
+  });
+  assert.equal(r.status, 422);
+  assert.equal(r.body.message, 'El adelanto no puede superar el precio de lista de la moto');
+}, () => errorRPC('PT435', 'El adelanto no puede superar el precio de lista de la moto')));
+
+test('HU-005 apoyo: una moto sin precio de lista no se separa y lo explica', async () => entorno(async base => {
+  const r = await pedir(`${base}/api/unidades/12/separaciones`, 'vendedor', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'd2b7f3c4-5e6a-4b7c-9d8e-2f3a4b5c6d7e' },
+    body: JSON.stringify({
+      codcli: 1, codusuResponsable: 6, monto: 300, fechaPago: '2026-11-08', medioPago: 'Efectivo',
+      referencia: null, rutaEvidencia: null, observacion: 'Recibido en tienda', ingresoConfirmado: true
+    })
+  });
+  assert.equal(r.status, 422);
+  assert.equal(r.body.message, 'La moto no tiene precio de lista registrado; regístralo en Modelos antes de separar');
+}, () => errorRPC('PT436', 'La moto no tiene precio de lista registrado')));
+
+test('HU-005 apoyo: una fecha de adelanto de hace más de 30 días responde 422', async () => entorno(async base => {
+  const r = await pedir(`${base}/api/unidades/12/separaciones`, 'vendedor', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'e3c8a4d5-6f7a-4c8d-9e0f-3a4b5c6d7e8f' },
+    body: JSON.stringify({
+      codcli: 1, codusuResponsable: 6, monto: 300, fechaPago: '2026-01-02', medioPago: 'Efectivo',
+      referencia: null, rutaEvidencia: null, observacion: 'Recibido en tienda', ingresoConfirmado: true
+    })
+  });
+  assert.equal(r.status, 422);
+  assert.equal(r.body.message, 'La fecha del adelanto no puede ser de hace más de 30 días');
+}, () => errorRPC('PT437', 'La fecha del adelanto no puede ser de hace más de 30 días')));

@@ -3,14 +3,15 @@ import * as servicio from '../services/separacion.apoyo.service';
 import { ErrorHttp } from '../utils/errores';
 import { validarIdCompra } from '../utils/compra.validacion';
 import {
-  validarElegirTecho, validarNumeroDocumento, validarRegistrarComprador, verificarBytesEvidencia
+  validarElegirTecho, validarRegistrarComprador, verificarBytesEvidencia
 } from '../utils/separacion.apoyo.validacion';
 
 // Mensajes de la base escritos para el usuario (PT400); nada interno sale en la respuesta.
 const MENSAJES_COMPRADOR = new Set([
   'Tipo de documento inválido', 'El número no corresponde al tipo de documento', 'Número de documento inválido',
   'Nombre o razón social inválido', 'Apellido paterno inválido', 'Apellido materno inválido',
-  'Teléfono inválido', 'Correo inválido', 'Tipo de techo inexistente o inactivo', 'Moto o techo inválido'
+  'Teléfono inválido', 'Correo inválido', 'Tipo de techo inexistente o inactivo', 'Moto o techo inválido',
+  'Nombres inválidos', 'Celular inválido'
 ]);
 
 function responderErrorApoyo(res: Response, error: unknown) {
@@ -33,13 +34,6 @@ function responderErrorApoyo(res: Response, error: unknown) {
 export const obtenerFormulario: RequestHandler = async (_req, res) => {
   try { res.json({ ok: true, data: await servicio.obtenerFormulario(res.locals.db) }); }
   catch (error) { responderErrorApoyo(res, error); }
-};
-
-export const buscarComprador: RequestHandler = async (req, res) => {
-  try {
-    const numero = validarNumeroDocumento(req.query.numero);
-    res.json({ ok: true, data: await servicio.buscarComprador(res.locals.db, numero) });
-  } catch (error) { responderErrorApoyo(res, error); }
 };
 
 export const registrarComprador: RequestHandler = async (req, res) => {

@@ -15,14 +15,9 @@ export async function obtenerFormulario(db: SupabaseClient): Promise<FormularioS
   return data as FormularioSeparacion;
 }
 
-export async function buscarComprador(db: SupabaseClient, numero: string): Promise<CompradorSeparacion | null> {
-  const { data, error } = await db.rpc('hu005_buscar_cliente', { p_numdoc: numero });
-  if (error) throw error;
-  return (data ?? null) as CompradorSeparacion | null;
-}
-
+// Registra al comprador (sin documento). Si ya existe uno con los mismos nombres, apellidos y celular, lo devuelve.
 export async function registrarComprador(db: SupabaseClient, datos: RegistrarCompradorInput): Promise<CompradorSeparacion> {
-  const { data, error } = await db.rpc('hu005_registrar_cliente', { ...datos });
+  const { data, error } = await db.rpc('hu005_registrar_comprador', { ...datos });
   if (error) throw error;
   return data as CompradorSeparacion;
 }

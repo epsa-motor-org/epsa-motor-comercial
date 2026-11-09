@@ -11,7 +11,7 @@ import { COLORES } from "../../data/mockData";
 import { inventarioApi, useConsultaCentral } from "../../servicios/central";
 import { sePuedeSeparar } from "../../servicios/separacionCentral";
 import SepararMotoCentral from "../../components/dashboard/SepararCentral";
-import { ETAPAS_FILTRO_CENTRAL as ETAPAS_FILTRO, FILTRO_INICIAL, GRUPOS_LUGAR_API, TONO_COMERCIAL, contar, filtrarUnidades, modelosDeUnidades, ubicacionDe } from "../../servicios/inventarioCentral";
+import { ETAPAS_FILTRO_CENTRAL as ETAPAS_FILTRO, FILTRO_INICIAL, GRUPOS_LUGAR_API, TONO_COMERCIAL, contar, filtrarUnidades, modelosDeUnidades, techoDe, ubicacionDe } from "../../servicios/inventarioCentral";
 import ModeloImg from "../../components/ModeloImg";
 import MotoIllustration from "../../components/MotoIllustration";
 import { Card, PageHeader, Stat, Tabla, btnMini } from "../../components/ui";
@@ -85,7 +85,7 @@ export default function DisponibilidadCentral() {
         </p>
         <p className="mt-0.5 text-[12.5px] text-slate-500">
           {(() => { const x = ubicacionDe(u); return <span className={x.transito ? "font-semibold text-sky-700 dark:text-sky-300" : x.sin ? "font-semibold text-amber-700 dark:text-amber-300" : ""}>{x.texto}{x.programado ? `, ${x.detalle.toLowerCase()}` : ""}</span>; })()}
-          {", "}{(u.preparacion?.techo?.configuracion || "sin techo").toLowerCase()}, chasis {u.chauni}
+          {", "}{(() => { const c = techoDe(u.preparacion).config; return c === "Por definir" ? "techo por definir" : c.toLowerCase(); })()}, chasis {u.chauni}
         </p>
       </div>
       <span className="flex shrink-0 gap-2">
