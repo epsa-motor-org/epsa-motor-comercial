@@ -54,6 +54,60 @@ test('HU015 HTTP: GET leads autenticado usa RPC y solo admite paginación, no fi
   assert.equal(calls.length, 2);
 }));
 
+test('HU005 HTTP: GET /api/leads?buscar busca parcialmente por nombre o celular para los tres roles', async () => entorno(async (request, calls) => {
+  const porNombre = await request({ path: '/api/leads?buscar=Mar%C3%ADa', token: 'Gerente' });
+  assert.equal(porNombre.status, 200);
+  assert.deepEqual(porNombre.body, { ok: true, data: [
+    { codlead: '15', nombre: 'María Pérez', celular: '987654321' }
+  ] });
+  assert.deepEqual(calls[0], { name: 'hu005_buscar_leads', args: { p_buscar: 'María' }, token: 'Gerente' });
+
+  const porCelular = await request({ path: '/api/leads?buscar=987', token: 'Administradora' });
+  assert.equal(porCelular.status, 200);
+  assert.equal(porCelular.body.data.length, 2, 'la respuesta permite mostrar coincidencias múltiples');
+  assert.deepEqual(calls[1], { name: 'hu005_buscar_leads', args: { p_buscar: '987' }, token: 'Administradora' });
+
+  const sinResultados = await request({ path: '/api/leads?buscar=Sin%20coincidencias', token: 'Vendedor' });
+  assert.equal(sinResultados.status, 200);
+  assert.deepEqual(sinResultados.body, { ok: true, data: [] });
+  assert.deepEqual(calls[2], {
+    name: 'hu005_buscar_leads', args: { p_buscar: 'Sin coincidencias' }, token: 'Vendedor'
+  });
+}, (name, args) => name === 'hu005_buscar_leads'
+  ? { data: (args as { p_buscar: string }).p_buscar === 'María'
+    ? [{ codlead: '15', nombre: 'María Pérez', celular: '987654321' }]
+    : (args as { p_buscar: string }).p_buscar === '987'
+      ? [{ codlead: '15', nombre: 'María Pérez', celular: '987654321' },
+        { codlead: '16', nombre: 'María Rojas', celular: '987000111' }]
+      : [], error: null }
+  : { data: [], error: null }));
+
+test('HU005 HTTP: búsqueda de leads rechaza texto vacío, corto, teléfono corto y filtros desconocidos', async () => entorno(async (request, calls) => {
+  for (const path of [
+    '/api/leads?buscar=', '/api/leads?buscar=a', '/api/leads?buscar=12',
+    '/api/leads?buscar=Mar%C3%ADa&limite=10', '/api/leads?buscar=Mar%C3%ADa&codusu=1'
+  ]) assert.equal((await request({ path })).status, 400, path);
+  assert.equal(calls.length, 0);
+}));
+
+test('HU005 HTTP: búsqueda de leads requiere autenticación y rol permitido', async () => entorno(async (request, calls) => {
+  for (const [token, status] of [['', 401], ['expired', 401], ['Otro', 403]] as const) {
+    assert.equal((await request({ path: '/api/leads?buscar=Mar%C3%ADa', token })).status, status);
+  }
+  assert.equal(calls.length, 0);
+}));
+
+test('HU005 HTTP: error RPC de búsqueda se controla y no expone detalles', async () => {
+  for (const [code, status] of [['PT400', 400], ['42501', 403], ['XX000', 500]] as const) {
+    await entorno(async request => {
+      const r = await request({ path: '/api/leads?buscar=Mar%C3%ADa' });
+      assert.equal(r.status, status);
+      assert.ok(!JSON.stringify(r.body).includes('SQL privado'));
+      assert.ok(!JSON.stringify(r.body).includes('detalle privado'));
+    }, { data: null, error: { code, message: 'SQL privado', details: 'detalle privado' } });
+  }
+});
+
 test('HU015 HTTP: responsables y asignación restringidos a Gerente/Administradora', async () => entorno(async (request, calls) => {
   for (const rol of ['Gerente', 'Administradora']) {
     const r = await request({ path: '/api/leads/responsables', token: rol });

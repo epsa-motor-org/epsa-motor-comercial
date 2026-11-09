@@ -48,6 +48,16 @@ const migracionHu012 = readFileSync('supabase/migrations/202610100003_hu012_admi
 const migracionHu005 = readFileSync('supabase/migrations/202611050001_hu005_separacion_moto.sql', 'utf8');
 const migracionHu005Confirmador = readFileSync('supabase/migrations/202611060001_hu005_confirmador_transferencia.sql', 'utf8');
 const migracionHu005TechoPrecio = readFileSync('supabase/migrations/202611080001_hu005_decision_techo_y_precio.sql', 'utf8');
+const migracionHu005CompatibilidadTecho = readFileSync(
+  'supabase/migrations/202611090002_hu005_compatibilidad_techo_instalado.sql', 'utf8'
+);
+
+test('HU-005: compatibilidad de techo vive en la migration incremental posterior', () => {
+  assert.doesNotMatch(migracionHu005TechoPrecio, /PT438|hu005_validar_compatibilidad_techo_instalado/);
+  assert.match(migracionHu005CompatibilidadTecho, /PT438/);
+  assert.doesNotMatch(migracionHu005CompatibilidadTecho, /RENAME\s+TO\s+hu005_crear_separacion_base/i);
+  assert.doesNotMatch(migracionHu005CompatibilidadTecho, /ADD COLUMN/i);
+});
 
 test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y seguridad', async t => {
   const db = new PGlite();
@@ -217,6 +227,7 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
     await db.exec(migracionHu005);
     await db.exec(migracionHu005Confirmador);
     await db.exec(migracionHu005TechoPrecio);
+    await db.exec(migracionHu005CompatibilidadTecho);
 
     const authRows = uuids.map(id => "('" + id + "')").join(',');
     await db.exec("INSERT INTO auth.users(id) VALUES " + authRows + "; "
@@ -449,6 +460,103 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
         assert.equal(await administrativo(() => escalar<number>(
           'SELECT count(*)::int r FROM public.separacion WHERE idempotenciasep=$1', [clave]
         )), 1);
+      }
+    });
+
+    await t.test('ausencia de preparación no se interpreta como evidencia de techo instalado', async () => {
+      await login(1);
+      const tipoB = await administrativo(() => escalar<number>(
+        "INSERT INTO public.tipotecho(nomtte) VALUES ('Techo QA sin preparación') RETURNING codtte r"
+      ));
+
+      const unidadSinCodtte = await crearUnidad('SIN-CODTTE-SIN-PREPARACION');
+      await administrativo(async () => {
+        await db.query('UPDATE public.unidad SET codtte=NULL WHERE coduni=$1', [unidadSinCodtte]);
+        await db.query('DELETE FROM public.preparacionunidad WHERE coduni=$1', [unidadSinCodtte]);
+      });
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.preparacionunidad WHERE coduni=$1', [unidadSinCodtte]
+      )), 0);
+      await assert.doesNotReject(crearSeparacion(unidadSinCodtte, { decisionTecho: 'Sin techo' }));
+
+      const unidadSinFila = await crearUnidad('CON-CODTTE-SIN-PREPARACION');
+      await administrativo(() => db.query(
+        'DELETE FROM public.preparacionunidad WHERE coduni=$1', [unidadSinFila]
+      ));
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.preparacionunidad WHERE coduni=$1', [unidadSinFila]
+      )), 0);
+      await assert.doesNotReject(crearSeparacion(unidadSinFila, { decisionTecho: 'Con techo', codtte: tipoB }));
+
+      const unidadPorDefinirSinFila = await crearUnidad('POR-DEFINIR-SIN-PREPARACION');
+      await administrativo(() => db.query(
+        'DELETE FROM public.preparacionunidad WHERE coduni=$1', [unidadPorDefinirSinFila]
+      ));
+      await assert.doesNotReject(crearSeparacion(unidadPorDefinirSinFila, { decisionTecho: 'Por definir' }));
+    });
+
+    await t.test('techo físicamente instalado impone compatibilidad en POST y en la resolución PUT', async () => {
+      await login(1);
+      const tipoB = await administrativo(() => escalar<number>(
+        "INSERT INTO public.tipotecho(nomtte) VALUES ('Techo QA tipo B') RETURNING codtte r"
+      ));
+      const instalarTechoA = async (etiqueta: string) => {
+        const unidad = await crearUnidad(etiqueta);
+        await administrativo(() => db.query(
+          "UPDATE public.preparacionunidad SET esttecho='Instalado' WHERE coduni=$1", [unidad]
+        ));
+        return unidad;
+      };
+
+      const unidadPorDefinir = await instalarTechoA('INSTALADO-POR-DEFINIR');
+      const techoPorDefinir = await crearSeparacion(unidadPorDefinir, { decisionTecho: 'Por definir' });
+      assert.equal(techoPorDefinir.techo.decision, 'Por definir');
+
+      const unidadTipoA = await instalarTechoA('INSTALADO-MISMO-TIPO');
+      const techoTipoA = await crearSeparacion(unidadTipoA, { decisionTecho: 'Con techo', codtte: 1 });
+      assert.deepEqual(techoTipoA.techo, { decision: 'Con techo', codtte: '1', guardado: true });
+
+      for (const [etiqueta, decisionTecho, codtte] of [
+        ['INSTALADO-OTRO-TIPO-POST', 'Con techo', tipoB],
+        ['INSTALADO-SIN-TECHO-POST', 'Sin techo', null]
+      ] as const) {
+        const unidad = await instalarTechoA(etiqueta);
+        const unidadAntes = await operativo(unidad);
+        const prepAntes = await preparacion(unidad);
+        await assert.rejects(crearSeparacion(unidad, { decisionTecho, codtte }), error('PT438'));
+        assert.deepEqual(await operativo(unidad), unidadAntes);
+        assert.deepEqual(await preparacion(unidad), prepAntes);
+        assert.equal(await administrativo(() => escalar<number>(
+          'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidad]
+        )), 0, 'rechazar una decisión incompatible revierte separación y adelanto');
+        assert.equal(await administrativo(() => escalar<number>(
+          'SELECT count(*)::int r FROM public.unidad WHERE coduni=$1', [unidad]
+        )), 1, 'la operación no cambia automáticamente a otra unidad');
+      }
+
+      for (const [etiqueta, decision, codtte] of [
+        ['INSTALADO-OTRO-TIPO-PUT', 'Con techo', tipoB],
+        ['INSTALADO-SIN-TECHO-PUT', 'Sin techo', null]
+      ] as const) {
+        const unidad = await instalarTechoA(etiqueta);
+        const unidadAntes = await operativo(unidad);
+        const prepAntes = await preparacion(unidad);
+        const separacion = await crearSeparacion(unidad, { decisionTecho: 'Por definir' });
+        const cuentaAntes = await administrativo(() => escalar<{ cantidad: number; adelanto: number }>(
+          'SELECT jsonb_build_object(\'cantidad\',count(*)::int,\'adelanto\',coalesce(sum(monadesep),0)) r '
+            + 'FROM public.separacion WHERE coduni=$1', [unidad]
+        ));
+        await assert.rejects(guardarTecho(separacion.codsep, decision, codtte), error('PT438'));
+        const cuentaDespues = await administrativo(() => escalar<{ cantidad: number; adelanto: number }>(
+          'SELECT jsonb_build_object(\'cantidad\',count(*)::int,\'adelanto\',coalesce(sum(monadesep),0)) r '
+            + 'FROM public.separacion WHERE coduni=$1', [unidad]
+        ));
+        assert.deepEqual(cuentaDespues, cuentaAntes, 'el PUT rechazado no duplica separación ni adelanto');
+        assert.deepEqual(await operativo(unidad), { ...unidadAntes, estcomuni: 'Separada' });
+        assert.deepEqual(await preparacion(unidad), prepAntes);
+        const actual = await resumenSeparacion(separacion.codsep);
+        assert.equal(actual.decision, 'Por definir', 'la decisión inicial permanece resoluble tras el rechazo');
+        assert.equal(actual.tipo, null);
       }
     });
 
@@ -722,6 +830,10 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
         "SELECT has_function_privilege('authenticated',"
           + "'public.hu005_crear_separacion_base(bigint,bigint,bigint,bigint,numeric,date,text,text,text,text,boolean,uuid)',"
           + "'EXECUTE') r"
+      )), false);
+      assert.equal(await administrativo(() => escalar<boolean>(
+        "SELECT has_function_privilege('authenticated',"
+          + "'public.hu005_validar_compatibilidad_techo_instalado(bigint,text,bigint)','EXECUTE') r"
       )), false);
 
       const unidad = await crearUnidad('DIRECTO');

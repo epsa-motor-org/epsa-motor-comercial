@@ -23,6 +23,7 @@ export function responderErrorSeparacion(res: Response, error: unknown) {
     PT435: [422, 'El tipo de techo no existe o está inactivo'],
     PT436: [422, 'La unidad no tiene un precio de lista configurado'],
     PT437: [409, 'La elección de techo ya no se puede modificar'],
+    PT438: [409, 'La elección de techo no es compatible con el techo instalado en esta unidad'],
     '23503': [404, 'No se encontró la unidad, el comprador o el responsable'],
     '23505': [409, 'La unidad ya tiene una separación activa'],
     '23514': [400, 'Los datos no cumplen las restricciones de separación'],

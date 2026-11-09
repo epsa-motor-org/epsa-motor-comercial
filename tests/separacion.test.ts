@@ -441,11 +441,13 @@ for (const [code, status] of [
   ['42501', 403], ['PT400', 400], ['PT404', 404], ['PT407', 422], ['PT426', 422],
   ['PT427', 422], ['PT428', 422], ['PT429', 409], ['PT430', 409], ['PT431', 409],
   ['PT432', 422], ['PT433', 422], ['PT434', 422], ['PT435', 422], ['PT436', 422],
-  ['PT437', 409], ['XX000', 500]
+  ['PT437', 409], ['PT438', 409], ['XX000', 500]
 ] as const) {
   test(`HU-005 API: error RPC ${code} devuelve ${status} sin filtrar detalles`, async () => entorno(async request => {
     const respuesta = await request();
     assert.equal(respuesta.status, status);
+    if (code === 'PT438') assert.equal(respuesta.body.message,
+      'La elección de techo no es compatible con el techo instalado en esta unidad');
     assert.ok(!JSON.stringify(respuesta.body).includes('privado'));
     assert.ok(!JSON.stringify(respuesta.body).includes('secreto'));
   }, () => errorRPC(code)));
