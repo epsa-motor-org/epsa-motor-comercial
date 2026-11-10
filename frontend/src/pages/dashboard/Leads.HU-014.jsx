@@ -12,6 +12,7 @@ import { listarCanalesWhatsapp, listarUsuariosSupabase, registrarLeadApi } from 
 import { mensajeError } from "../../lib/errores";
 import { EstadoConexion } from "../../components/dashboard/Sprint2";
 import LeadsCentral from "../../components/dashboard/LeadsCentral";
+import { inventarioApi } from "../../servicios/central";
 
 const TONO = { Nuevo: "bg-sky-100 text-sky-700", "En seguimiento": "bg-amber-100 text-amber-700", Cotizado: "bg-violet-100 text-violet-700", "Cerrado ganado": "bg-emerald-100 text-emerald-700", Perdido: "bg-slate-200 text-slate-600" };
 const VACIO = { contacto: "", telefono: "", canal: "", modelo: "", color: "", sede: "Comas", responsable: "", codusu: "", proximo: "", estado: "Nuevo", nota: "", primerContacto: true, otraOportunidad: false };
@@ -20,6 +21,8 @@ const hoyISO = hoyLocal;
 
 // Datos que acepta la API de leads
 const COLORES_LEAD = ["Rojo", "Azul", "Amarillo", "Verde", "Negro"];
+// «AMARILLO», «amarillo» o «Amarillo» son el mismo color
+const colorLead = (c) => COLORES_LEAD.find((x) => x.toLowerCase() === String(c || "").trim().toLowerCase()) || "";
 const ROLES_LEAD = ["Gerente", "Administradora", "Vendedor"];
 function canalApi(canal) {
   if (canal === "Visita a sede") return { canlea: "Presencial", orilea: null };
@@ -74,6 +77,28 @@ export default function Leads() {
   const sedesLead = MODO_REAL ? sedes.map((s) => s.nombre) : SEDES_ATENCION;
   const codsedDe = (nombre) => sedes.find((s) => s.nombre === nombre)?.codsed || null;
   const nuevoReal = MODO_REAL && !modal?.lead;
+
+  // Color de interés (DEF-LDS-001): los colores activos del modelo y los que hay en el inventario central para ese
+  // modelo (sin contar las vendidas), entre los cinco que acepta la API. Si el inventario no responde, los del modelo.
+  const [coloresInventario, setColoresInventario] = useState({});
+  const abiertoNuevo = Boolean(modal) && nuevoReal;
+  useEffect(() => {
+    if (!abiertoNuevo) return undefined;
+    let vivo = true;
+    inventarioApi().then(({ unidades }) => {
+      if (!vivo) return;
+      const m = {};
+      unidades.filter((u) => u.comercial !== "Vendida").forEach((u) => { (m[String(u.codmod)] ||= new Set()).add(colorLead(u.coluni)); });
+      setColoresInventario(Object.fromEntries(Object.entries(m).map(([k, v]) => [k, [...v].filter(Boolean)])));
+    }).catch(() => {});
+    return () => { vivo = false; };
+  }, [abiertoNuevo]);
+  const coloresDe = (m) => {
+    if (!m) return [];
+    const hay = new Set([...(m.colores || []), ...(nuevoReal ? coloresInventario[String(m.codmodApi || "")] || [] : [])].map(colorLead));
+    const extra = nuevoReal ? [] : (m.colores || []).filter((c) => !COLORES_LEAD.includes(c));
+    return [...COLORES_LEAD.filter((c) => hay.has(c)), ...extra];
+  };
 
   const proximo = (l) => seguimientos.filter((s) => s.leadId === l.id && !s.hecho).sort((a, b) => a.fecha.localeCompare(b.fecha))[0];
   const cerrado = (l) => ["Cerrado ganado", "Perdido"].includes(l.estado);
@@ -354,7 +379,7 @@ export default function Leads() {
               </select>
             : <select id="lead-responsable" className="field-input" value={form.responsable} onChange={set("responsable")}>{[...new Set([SIN, ...vendedores.map((v) => v.nombre), ...(form.responsable ? [form.responsable] : [])])].map((n) => <option key={n}>{n}</option>)}</select>}</Campo>
           {modal?.lead && <Campo etiqueta="Estado"><select className="field-input" value={form.estado} onChange={set("estado")}>{ESTADOS_LEAD.map((c) => <option key={c}>{c}</option>)}</select></Campo>}
-          <Campo etiqueta="Color de interés"><select id="lead-color" className="field-input" value={form.color} onChange={set("color")} disabled={!modeloForm}><option value="">{modeloForm ? "Cualquiera" : "Elige primero el modelo"}</option>{(modeloForm?.colores || []).map((c) => <option key={c}>{c}</option>)}</select></Campo>
+          <Campo etiqueta="Color de interés"><select id="lead-color" className="field-input" value={form.color} onChange={set("color")} disabled={!modeloForm}><option value="">{modeloForm ? "Cualquiera" : "Elige primero el modelo"}</option>{coloresDe(modeloForm).map((c) => <option key={c}>{c}</option>)}</select></Campo>
           {nuevoReal && <Campo etiqueta="Primer contacto" error={err.proximo}><input id="lead-proximo" type="date" className="field-input" min={hoy} value={form.proximo} onChange={set("proximo")} /></Campo>}
           <Campo etiqueta="Notas" error={err.nota} className="sm:col-span-2"><textarea className="field-input" rows={2} maxLength={520} value={form.nota} onChange={set("nota")} placeholder="Qué preguntó, cuándo prefiere que lo llamen…" /></Campo>
           {!modal?.lead && !MODO_REAL && (

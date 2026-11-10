@@ -14,6 +14,9 @@ import { IconBuscar, IconClose, IconFiltros } from "../components/Icons";
 export function TarjetaModelo({ m, colores = true, colorInicial }) {
   const cotizar = useCotizar();
   const [color, setColor] = useState(colorInicial || m.colorPortada || m.colores?.[0]);
+  // Con una foto principal propia (HU-036), la tarjeta la muestra hasta que se elige un color
+  const [elegido, setElegido] = useState(Boolean(colorInicial));
+  const elegir = (c) => { setColor(c); setElegido(true); };
   const badge = (m.badges || [])[0];
   const potencia = m.resumen?.Potencia && !/ver/i.test(m.resumen.Potencia) ? m.resumen.Potencia : null;
   return (
@@ -21,7 +24,7 @@ export function TarjetaModelo({ m, colores = true, colorInicial }) {
       <Link to={`/modelos/${m.id}`} className="relative block overflow-hidden rounded-2xl bg-escenario dark:bg-escenario-oscuro" aria-label={`Ver ${m.nombre}`}>
         {badge && <span className={`absolute left-3 top-3 z-10 rounded-md px-2 py-0.5 text-[10.5px] font-bold tracking-wide text-white ${badge.startsWith("NUEVO") ? "bg-acento" : "bg-marino-700"}`}>{badge}</span>}
         {(m.colores || []).length > 1 && <span className="absolute right-3 top-3 z-10 rounded-full bg-white/90 px-2 py-0.5 text-[11px] font-bold text-marino dark:bg-[#101c33] dark:text-white">{m.colores.length} colores</span>}
-        <ModeloImg modelo={m} color={color} className="aspect-[4/3] w-full object-contain p-6 transition duration-300 group-hover:scale-[1.03]" />
+        <ModeloImg modelo={m} color={elegido || !m.sinTinte ? color : undefined} className="aspect-[4/3] w-full object-contain p-6 transition duration-300 group-hover:scale-[1.03]" />
       </Link>
       <div className="flex flex-1 flex-col pt-4">
         <div className="flex items-center justify-between gap-3">
@@ -29,7 +32,7 @@ export function TarjetaModelo({ m, colores = true, colorInicial }) {
           {colores && (m.colores || []).length > 1 && (
             <div className="flex shrink-0 gap-1.5">
               {m.colores.map((c) => (
-                <button key={c} type="button" title={c} aria-label={`Ver en color ${c}`} aria-pressed={color === c} onClick={() => setColor(c)} onMouseEnter={() => setColor(c)}
+                <button key={c} type="button" title={c} aria-label={`Ver en color ${c}`} aria-pressed={color === c} onClick={() => elegir(c)} onMouseEnter={() => elegir(c)}
                   className={`h-4 w-4 rounded-full border ${color === c ? "ring-2 ring-marino-700/40 ring-offset-1 dark:ring-white/60 dark:ring-offset-[#0a1426]" : "border-slate-300 dark:border-white/20"}`} style={{ background: COLOR_HEX[c] || "#94a3b8" }} />
               ))}
             </div>

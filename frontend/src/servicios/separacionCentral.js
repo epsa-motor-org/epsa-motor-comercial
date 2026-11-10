@@ -1,7 +1,8 @@
-// HU-005 · Separar una moto con adelanto confirmado (API de Michelle + complemento 202611070001)
+// HU-005 · Separar una moto con adelanto confirmado (API de Michelle, PR #44, y complementos 2026110700xx–1000xx)
 // Todo pasa por la API con la sesión de la persona: el comprador, la captura y la separación se guardan en la base
 // central. La separación se envía con una clave de intento (Idempotency-Key): si la red falla y se reintenta,
-// no se registra dos veces.
+// no se registra dos veces. La decisión de techo viaja en la misma solicitud (contrato de Michelle del 9 de
+// noviembre): si la separación se guarda pero el techo no, la API responde 202 y solo se reintenta el techo.
 import { pedir, urlFirmadaStorage } from "../lib/api";
 
 export const BUCKET_CAPTURAS = "separaciones-evidencia";
@@ -11,6 +12,8 @@ export const MAX_REFERENCIA = 30; // N° de operación del banco (la base admite
 export const MAX_OBSERVACION = 300; // mismo límite que hu005_crear_separacion
 export const DIAS_FECHA_ADELANTO = 30; // la fecha del adelanto puede ser de hoy o de los últimos 30 días
 export const MAX_MONTO = 9999999.99;
+export const MIN_ADELANTO = 100; // mínimo del adelanto (OBS-S3-013, confirmado por Harold); la base lo vuelve a revisar
+// Máximo del adelanto: el precio de lista de la moto (regla de Harold); la base lo vuelve a revisar
 
 // Situaciones en las que la moto ya está comprometida y no se puede separar
 export const COMPROMETIDA = ["Separada", "Vendida"];
@@ -32,13 +35,26 @@ export function subirCapturaApi(coduni, archivo) {
   fd.append("archivo", archivo, archivo.name || "captura");
   return pedir(`/api/unidades/${coduni}/separaciones/evidencia`, { metodo: "POST", formulario: fd }).then((r) => r.data);
 }
-// La separación (201 nueva; 200 si era el mismo envío y ya estaba guardado)
+// La separación con su decisión de techo: 201 nueva; 200 si era el mismo envío y ya estaba guardado; 202 si la
+// separación quedó guardada pero falta guardar el techo (warning TECHO_PENDIENTE_GUARDAR)
 export const separarMotoApi = (coduni, cuerpo, clave) =>
   pedir(`/api/unidades/${coduni}/separaciones`, { metodo: "POST", cuerpo, headers: { "Idempotency-Key": clave } });
-// Techo que eligió el comprador (después de separar o desde la ficha). Elegir el mismo techo otra vez no cambia
-// nada: sirve para reintentar sin duplicar la separación ni el adelanto.
-export const elegirTechoApi = (coduni, codtte) =>
-  pedir(`/api/unidades/${coduni}/separacion/techo`, { metodo: "POST", cuerpo: { codtte: Number(codtte) } }).then((r) => r.data);
+export const techoPendienteDeGuardar = (r) => r?.status === 202 || r?.warning?.code === "TECHO_PENDIENTE_GUARDAR" || r?.data?.techo?.guardado === false;
+// Cuerpo del techo para la API: { decision } o { decision: «Con techo», codtte }
+export const techoParaEnviar = (decision, tipo) => (decision === CON_TECHO ? { decision, codtte: Number(tipo?.codtte) } : { decision });
+// Guarda o reintenta la decisión de techo de una separación: resuelve «Por definir» con la decisión final del
+// comprador. Repetir la misma decisión no cambia nada; una decisión final ya guardada no se puede cambiar.
+export const guardarTechoSeparacionApi = (codsep, decision, tipo) =>
+  pedir(`/api/separaciones/${codsep}/techo`, { metodo: "PUT", cuerpo: techoParaEnviar(decision, tipo) }).then((r) => r.data);
+// Interesados (leads) por nombre o celular para completar los datos del comprador (OBS-S3-011). El vendedor solo
+// ve los suyos; la gerencia y la administración, todos. Hasta 20 resultados.
+export const MIN_BUSQUEDA = 2;
+export function textoBusquedaValido(t) {
+  const x = limpio(t);
+  if (x.length < MIN_BUSQUEDA || x.length > 100) return false;
+  return /\p{L}/u.test(x) || x.replace(/\D/g, "").length >= 3;
+}
+export const buscarLeadsApi = (texto) => pedir(`/api/leads?buscar=${encodeURIComponent(limpio(texto))}`).then((r) => (Array.isArray(r.data) ? r.data : r.data?.items || []));
 // Separación activa de una moto (null si no tiene)
 export const separacionActivaApi = (coduni) => pedir(`/api/unidades/${coduni}/separacion`).then((r) => r.data ?? null);
 // Abrir la captura guardada (dirección temporal; solo para los roles comerciales)
@@ -105,9 +121,36 @@ export const errorTelefono = (v) => {
 // muestran «El adelanto debe ser mayor que cero» y no se envían. Coma o punto sirven para los decimales.
 // ---------------------------------------------------------------------------------------------
 export const MONTO_MAYOR_QUE_CERO = "El adelanto debe ser mayor que cero";
-// Al escribir o pegar solo se quitan los caracteres que nunca forman un monto (letras, «S/», espacios);
-// el signo y los separadores se dejan para validarlos
-export const filtrarMonto = (v) => String(v ?? "").replace(/[^\d.,-]/g, "").slice(0, 14);
+// Al escribir o pegar se quitan los caracteres que nunca forman un monto (letras, «S/», espacios) y no se deja
+// escribir más de 2 decimales ni más cifras enteras que las del tope (DEF-S3-001: 9999999999,59 ya no entra).
+// Si lo escrito o pegado se pasa, el campo conserva el valor anterior («previo»): nunca se recorta un monto
+// pegado en silencio (por ejemplo, 1.000.000 no queda en 10000).
+// El signo menos se deja visible para avisar que el monto debe ser mayor que cero (regla de Harold). Si se pega un
+// monto con separador de miles («S/ 3,000.00»), se toma el último separador como decimal.
+export const cifrasEnteras = (tope) => (Number.isFinite(Number(tope)) && Number(tope) > 0 ? String(Math.trunc(Number(tope))).length : 8);
+export function filtrarMonto(v, maxEnteros = 8, previo) {
+  let t = String(v ?? "").replace(/[^\d.,-]/g, "");
+  const negativo = t.startsWith("-");
+  t = t.replace(/-/g, "");
+  const seps = [...t.matchAll(/[.,]/g)];
+  let sep = "";
+  if (seps.length) {
+    const tipos = new Set(seps.map((m) => m[0]));
+    if (tipos.size > 1 || seps.length === 1) {
+      const ultimo = seps[seps.length - 1];
+      sep = ultimo[0];
+      t = t.slice(0, ultimo.index).replace(/[.,]/g, "") + sep + t.slice(ultimo.index + 1);
+    } else t = t.replace(/[.,]/g, ""); // 1.000.000: separadores de miles
+  }
+  let [ent, dec] = sep ? t.split(sep) : [t, undefined];
+  ent = ent.replace(/^0+(?=\d)/, "");
+  if (ent.length > maxEnteros || (dec !== undefined && dec.length > 2)) {
+    if (previo !== undefined) return previo;
+    ent = ent.slice(0, maxEnteros);
+    if (dec !== undefined) dec = dec.slice(0, 2);
+  }
+  return `${negativo ? "-" : ""}${ent}${dec !== undefined ? `${sep}${dec}` : ""}`;
+}
 const FORMA_MONTO = /^-?\d+(?:[.,]\d+)?$/;
 // Número del monto (con coma o punto) o NaN si el texto no es un monto
 export function leerMonto(texto) {
@@ -147,24 +190,32 @@ export function precioListaDe(form, unidad) {
   return Number.isFinite(p) && p > 0 ? p : null;
 }
 export const SIN_PRECIO = "Esta moto no tiene precio de lista registrado. Pide a gerencia que lo registre en Modelos antes de separarla.";
+// Orden de los mensajes: vacío, formato, mayor que cero, decimales, precio de lista, mínimo y tope
 export function errorMonto(texto, precio) {
   const t = String(texto ?? "").trim();
   if (!t) return "Escribe el monto del adelanto.";
-  if (!FORMA_MONTO.test(t)) return /^-/.test(t) && /\d/.test(t) ? MONTO_MAYOR_QUE_CERO : "Escribe solo el monto, con coma o punto para los decimales (por ejemplo 300,50).";
+  if (t.startsWith("-")) return MONTO_MAYOR_QUE_CERO;
+  if (/[.,]$/.test(t)) return "Completa los decimales o borra la coma.";
+  if (!FORMA_MONTO.test(t)) return "Escribe solo el monto, sin separador de miles y con coma o punto para los decimales (por ejemplo 3000 o 3000,50).";
   const monto = leerMonto(t);
-  if (t.startsWith("-") || monto <= 0) return MONTO_MAYOR_QUE_CERO;
+  if (monto <= 0) return MONTO_MAYOR_QUE_CERO;
   if (/[.,]\d{3,}$/.test(t)) return "El monto lleva como máximo 2 decimales.";
   if (precio === null) return SIN_PRECIO;
   if (typeof precio === "number" && monto > precio) return `El adelanto no puede superar el precio de lista de la moto (${soles(precio)}).`;
   if (monto > MAX_MONTO) return "El monto es demasiado alto.";
+  if (monto < MIN_ADELANTO) return `El adelanto mínimo es ${soles(MIN_ADELANTO)}.`;
   return "";
 }
+export const ayudaAdelanto = (precio) => (typeof precio === "number" ? `De ${soles(MIN_ADELANTO)} a ${soles(precio)} (precio de lista). Sin separador de miles.` : `Desde ${soles(MIN_ADELANTO)}. Sin separador de miles.`);
 
 // ---------------------------------------------------------------------------------------------
-// Techo al separar (decisión de negocio del 8 de noviembre)
+// Techo al separar (decisión de negocio del 8 de noviembre y contrato de Michelle del 9)
 //   «Por definir»: el comprador aún no decide; la separación queda activa y la decisión pendiente.
 //   «Sin techo»: el comprador eligió expresamente la moto sin techo.
-//   «Con techo»: se registra el tipo elegido; si requiere instalación, queda pendiente en Preparación.
+//   «Con techo»: se registra el tipo elegido.
+// Es la decisión comercial: no cambia la configuración física de la moto ni su preparación (HU-004 y HU-033).
+// Una vez elegida «Sin techo» o «Con techo», no se cambia ni vuelve a «Por definir».
+// Si la moto ya tiene un techo instalado, solo se admite «Por definir» o ese mismo techo (PT438).
 // Si la separación se guardó pero el techo elegido no, se anota aquí para reintentarlo: eso es distinto de
 // «Por definir» (el comprador sí decidió; lo que falta es guardarlo).
 // ---------------------------------------------------------------------------------------------
@@ -186,6 +237,23 @@ export function tipoDeDecision(tipos = [], decision, codtte) {
   return null;
 }
 export const ESTADO_TECHO = { Pendiente: "por armar", "En proceso": "en armado", Instalado: "instalado" };
+// Techo instalado en la moto (HU-033 lo confirmó como «Instalado»): { codtte, nombre } o null
+export function techoInstaladoDe(unidad) {
+  const t = unidad?.preparacion?.operativa?.techo;
+  if (!t?.codtte || t.estado !== "Instalado") return null;
+  return { codtte: String(t.codtte), nombre: t.configuracion || unidad?.preparacion?.techo?.configuracion || "" };
+}
+// Con un techo instalado, una decisión es compatible si es «Por definir» o ese mismo techo
+export const compatibleConInstalado = (instalado, decision, tipo) => !instalado || decision === POR_DEFINIR || (decision === CON_TECHO && String(tipo?.codtte) === instalado.codtte);
+export const textoInstalado = (instalado) => `Esta moto tiene «${instalado.nombre}» instalado. Solo puede venderse o separarse con ese techo (o con el techo por definir). Si el comprador quiere otro techo o la moto sin techo, elige otra moto compatible del mismo modelo e infórmale el plazo estimado de preparación o instalación.`;
+// Texto de una decisión de techo ya guardada
+export function textoDecision(d, tipos = []) {
+  if (!d?.decision) return "Sin dato";
+  if (d.decision === POR_DEFINIR) return "Por definir: el comprador aún no decide";
+  if (d.decision === SIN_TECHO) return "Sin techo, elegido por el comprador";
+  const nombre = d.nombre || tipos.find((t) => String(t.codtte) === String(d.codtte))?.nombre || "Techo";
+  return `${nombre}, elegido por el comprador`;
+}
 
 // Techo elegido que quedó pendiente de guardar (solo en este navegador; la separación ya está en la base)
 const clavePendiente = (coduni) => `epsa:hu005:techo-pendiente:${coduni}`;
@@ -195,11 +263,22 @@ export function guardarTechoPendiente(coduni, dato) {
 export function leerTechoPendiente(coduni) {
   try {
     const d = JSON.parse(window.localStorage.getItem(clavePendiente(coduni)) || "null");
-    return d && d.codsep && d.codtte ? d : null;
+    return d && d.codsep && (d.decision === SIN_TECHO || (d.decision === CON_TECHO && d.codtte)) ? d : null;
   } catch { return null; }
 }
 export function borrarTechoPendiente(coduni) {
   try { window.localStorage.removeItem(clavePendiente(coduni)); } catch { /* sin almacenamiento local */ }
+}
+
+// Nombre de un interesado (un solo texto) repartido en nombres y apellidos, para revisarlo antes de guardar:
+// 2 palabras: nombre y apellido; 3: nombre y dos apellidos; 4 o más: dos nombres y el resto apellidos
+export function separarNombreLead(nombre) {
+  const p = soloNombre(limpio(nombre)).trim().split(" ").filter(Boolean)
+    .map((x) => x.charAt(0).toLocaleUpperCase("es-PE") + x.slice(1).toLocaleLowerCase("es-PE"));
+  if (p.length <= 1) return { nombres: p[0] || "", apellidoPaterno: "", apellidoMaterno: "" };
+  if (p.length === 2) return { nombres: p[0], apellidoPaterno: p[1], apellidoMaterno: "" };
+  if (p.length === 3) return { nombres: p[0], apellidoPaterno: p[1], apellidoMaterno: p[2] };
+  return { nombres: p.slice(0, 2).join(" "), apellidoPaterno: p[2], apellidoMaterno: p.slice(3).join(" ") };
 }
 
 export const soles = (n) => `S/ ${Number(n).toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

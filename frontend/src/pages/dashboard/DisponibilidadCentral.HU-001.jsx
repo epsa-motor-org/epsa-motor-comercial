@@ -3,6 +3,7 @@
 // situación comercial, cada una por separado. Sin clientes, costos ni boletas. La ubicación se filtra en el servidor
 // y el modelo aquí (con la lista de modelos que tienen motos); la vista se actualiza sola, con «Actualizar» y al volver
 // a la pestaña. HU-005: desde aquí se separa una moto libre (sin mostrar clientes en esta vista).
+// HU-006: también se registra la venta de una moto libre o separada (la venta convierte la separación).
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "../../components/dashboard/LinkPanel";
 import { useApp } from "../../store/appStore.jsx";
@@ -11,6 +12,8 @@ import { COLORES } from "../../data/mockData";
 import { inventarioApi, useConsultaCentral } from "../../servicios/central";
 import { sePuedeSeparar } from "../../servicios/separacionCentral";
 import SepararMotoCentral from "../../components/dashboard/SepararCentral";
+import VenderMotoCentral from "../../components/dashboard/VenderCentral";
+import { sePuedeVender } from "../../servicios/ventaCentral";
 import { ETAPAS_FILTRO_CENTRAL as ETAPAS_FILTRO, FILTRO_INICIAL, GRUPOS_LUGAR_API, TONO_COMERCIAL, contar, filtrarUnidades, modelosDeUnidades, techoDe, ubicacionDe } from "../../servicios/inventarioCentral";
 import ModeloImg from "../../components/ModeloImg";
 import MotoIllustration from "../../components/MotoIllustration";
@@ -28,6 +31,8 @@ function leerFiltros() {
 // Texto de la situación comercial con su cantidad (libre, no disponible, separada o vendida)
 // HU-005 · Botón principal para separar (se distingue de «Ver ficha»)
 const btnSeparar = "rounded-md bg-marino-700 px-3 py-1 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-marino focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-marino-700 dark:bg-white dark:text-marino dark:hover:bg-white/90";
+// HU-006 · Botón para registrar la venta (secundario: se distingue de «Separar»)
+const btnVender = "rounded-md border border-emerald-600 px-3 py-1 text-[12.5px] font-semibold text-emerald-700 transition hover:bg-emerald-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 dark:border-emerald-400 dark:text-emerald-300 dark:hover:bg-emerald-500/10";
 const textoComercial = (c, k) => ({ Libre: k === 1 ? "libre" : "libres", "No disponible": k === 1 ? "no disponible" : "no disponibles", Separada: k === 1 ? "separada" : "separadas", Vendida: k === 1 ? "vendida" : "vendidas" }[c] || String(c).toLowerCase());
 
 export default function DisponibilidadCentral() {
@@ -35,6 +40,7 @@ export default function DisponibilidadCentral() {
   const { puede } = useAuth();
   const separa = puede("separaciones.registrar");
   const [separar, setSeparar] = useState(null);
+  const [vender, setVender] = useState(null);
   const guardado = useMemo(leerFiltros, []);
   const [servidor, setServidor] = useState({ ...SERVIDOR_INICIAL, ...guardado.servidor });
   const [f, setF] = useState({ ...FILTRO_INICIAL, ...guardado.f });
@@ -90,6 +96,7 @@ export default function DisponibilidadCentral() {
       </div>
       <span className="flex shrink-0 gap-2">
         {separa && sePuedeSeparar(u) && <button type="button" className={btnSeparar} onClick={() => setSeparar(u)} data-separar={u.coduni}>Separar</button>}
+        {separa && sePuedeVender(u) && <button type="button" className={btnVender} onClick={() => setVender(u)} data-vender={u.coduni}>Vender</button>}
         <Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ver ficha</Link>
       </span>
     </li>
@@ -278,13 +285,14 @@ export default function DisponibilidadCentral() {
               <td className="px-4 py-3"><TextoTecho preparacion={u.preparacion} /></td>
               <td className="px-4 py-3"><PillPreparacion preparacion={u.preparacion} /></td>
               <td className="px-4 py-3"><PillComercial comercial={u.comercial} /></td>
-              <td className="px-4 py-3"><span className="flex gap-2">{separa && sePuedeSeparar(u) && <button type="button" className={btnSeparar} onClick={() => setSeparar(u)} data-separar={u.coduni}>Separar</button>}<Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ficha</Link></span></td>
+              <td className="px-4 py-3"><span className="flex gap-2">{separa && sePuedeSeparar(u) && <button type="button" className={btnSeparar} onClick={() => setSeparar(u)} data-separar={u.coduni}>Separar</button>}{separa && sePuedeVender(u) && <button type="button" className={btnVender} onClick={() => setVender(u)} data-vender={u.coduni}>Vender</button>}<Link className={btnMini} to={`/admin/inventario/${u.coduni}`}>Ficha</Link></span></td>
             </tr>
           ))}
         </Tabla>
       )}
-      <p className="mt-4 text-[12.5px] text-slate-400">Ubicación, preparación y situación comercial se registran por separado. Toda moto libre se puede vender con o sin techo; si el cliente elige un techo al separar, queda por armar en Preparación.</p>
+      <p className="mt-4 text-[12.5px] text-slate-400">Ubicación, preparación y situación comercial se registran por separado. Toda moto libre se puede separar o vender con o sin techo. La decisión de techo del comprador no cambia la configuración ni la preparación de la moto: su instalación se programa desde la ficha.</p>
       {separar && <SepararMotoCentral unidad={separar} onClose={() => setSeparar(null)} onHecho={() => consulta.refrescar(true)} onConflicto={() => consulta.refrescar(true)} />}
+      {vender && <VenderMotoCentral unidad={vender} onClose={() => setVender(null)} onHecho={() => consulta.refrescar(true)} onConflicto={() => consulta.refrescar(true)} />}
     </div>
   );
 }

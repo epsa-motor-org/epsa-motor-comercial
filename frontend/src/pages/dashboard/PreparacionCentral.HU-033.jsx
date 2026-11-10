@@ -20,7 +20,7 @@ const VISTAS = {
   listas: (po) => !techoPorArmar(po),
   todas: () => true,
 };
-const SUBTITULO = "La moto se vende con o sin techo. Cuando el cliente elige un techo al separar, aquí se registra su armado hasta que quede instalado.";
+const SUBTITULO = "La moto se vende con o sin techo. Cuando se le configura un techo, aquí se registra su armado hasta que quede instalado.";
 
 export default function PreparacionCentral() {
   const { puede } = useAuth();
@@ -52,7 +52,7 @@ export default function PreparacionCentral() {
       {sinDatos && <Vacio titulo="La preparación todavía no está habilitada" texto="Falta ejecutar en Supabase el SQL de mejoras finales (docs/supabase-sprint2-final.sql)." />}
 
       <div className="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-3">
-        <Stat etiqueta="Techo por armar" valor={n("porArmar")} tono={n("porArmar") ? "ambar" : "marino"} nota="El cliente eligió techo al separar" />
+        <Stat etiqueta="Techo por armar" valor={n("porArmar")} tono={n("porArmar") ? "ambar" : "marino"} nota="Techo configurado, falta instalarlo" />
         <Stat etiqueta="Techo en armado" valor={n("enArmado")} nota="Ya se está instalando" />
         <Stat etiqueta="Listas para entrega" valor={n("listas")} tono="verde" nota="Sin techo o con su techo instalado" />
       </div>
@@ -91,7 +91,7 @@ export default function PreparacionCentral() {
         </Tabla>
       ))}
       {!gestiona && <p className="mt-3 text-[12.5px] text-slate-400">Tu rol consulta la preparación; el armado del techo lo registran gerencia y administración.</p>}
-      <Card className="mt-5 text-[12.5px] text-slate-500">Una moto sin techo elegido no tiene pendientes y se puede vender. El techo que elige el cliente al separar queda aquí por armar hasta registrarlo instalado. El aviso de FIVESA, JAVICAR o FIBRAT se registra en «Techo instalado» y no mueve la moto: el traslado va en Movimientos.</Card>
+      <Card className="mt-5 text-[12.5px] text-slate-500">Una moto sin techo elegido no tiene pendientes y se puede vender. El techo configurado en la ficha de la moto queda aquí por armar hasta registrarlo instalado; la decisión del comprador al separar o vender no lo programa sola. El aviso de FIVESA, JAVICAR o FIBRAT se registra en «Techo instalado» y no mueve la moto: el traslado va en Movimientos.</Card>
 
       <ModalAvancePreparacion datos={modal} onClose={() => setModal(null)} onHecho={() => consulta.refrescar(true)} />
     </div>
