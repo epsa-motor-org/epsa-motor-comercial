@@ -47,16 +47,29 @@ const migracionHu033 = readFileSync('supabase/migrations/202610280003_hu033_prep
 const migracionHu012 = readFileSync('supabase/migrations/202610100003_hu012_admin_modelos.sql', 'utf8');
 const migracionHu005 = readFileSync('supabase/migrations/202611050001_hu005_separacion_moto.sql', 'utf8');
 const migracionHu005Confirmador = readFileSync('supabase/migrations/202611060001_hu005_confirmador_transferencia.sql', 'utf8');
-const migracionHu005TechoPrecio = readFileSync('supabase/migrations/202611080001_hu005_decision_techo_y_precio.sql', 'utf8');
+const migracionHu005TechoVenta = readFileSync('supabase/migrations/202611080001_hu005_techo_y_venta.sql', 'utf8');
+const migracionHu005DecisionTope = readFileSync('supabase/migrations/202611080002_hu005_decision_techo_y_tope.sql', 'utf8');
+const migracionHu005Comprador = readFileSync('supabase/migrations/202611080003_hu005_comprador_sin_documento.sql', 'utf8');
+const migracionHu005Integracion = readFileSync('supabase/migrations/202611090001_hu005_decision_techo_y_precio_integracion.sql', 'utf8');
+const migracionHu005Leads = readFileSync('supabase/migrations/202611090002_hu005_buscar_leads.sql', 'utf8');
 const migracionHu005CompatibilidadTecho = readFileSync(
-  'supabase/migrations/202611090002_hu005_compatibilidad_techo_instalado.sql', 'utf8'
+  'supabase/migrations/202611090003_hu005_compatibilidad_techo_instalado.sql', 'utf8'
 );
 
 test('HU-005: compatibilidad de techo vive en la migration incremental posterior', () => {
-  assert.doesNotMatch(migracionHu005TechoPrecio, /PT438|hu005_validar_compatibilidad_techo_instalado/);
+  assert.doesNotMatch(migracionHu005Integracion, /PT438|hu005_validar_compatibilidad_techo_instalado/);
+  assert.match(migracionHu005Integracion, /decisiontecho_solicitada/);
+  assert.doesNotMatch(migracionHu005Integracion, /ADD COLUMN IF NOT EXISTS dectechosep/i);
+  assert.doesNotMatch(migracionHu005Integracion, /ADD COLUMN IF NOT EXISTS decisiontecho\s/i);
   assert.match(migracionHu005CompatibilidadTecho, /PT438/);
   assert.doesNotMatch(migracionHu005CompatibilidadTecho, /RENAME\s+TO\s+hu005_crear_separacion_base/i);
-  assert.doesNotMatch(migracionHu005CompatibilidadTecho, /ADD COLUMN/i);
+  assert.doesNotMatch(migracionHu005CompatibilidadTecho, /DROP COLUMN|DROP TRIGGER IF EXISTS hu005_unidad_decision_techo/i);
+  assert.match(migracionHu005Integracion, /DROP TRIGGER IF EXISTS hu005_unidad_decision_techo/i);
+  assert.match(migracionHu005Integracion, /CREATE OR REPLACE FUNCTION public\.hu005_elegir_techo/i);
+  assert.match(migracionHu005TechoVenta, /CREATE OR REPLACE FUNCTION public\.hu005_elegir_techo/i);
+  assert.match(migracionHu005DecisionTope, /PT437/);
+  assert.match(migracionHu005Comprador, /hu005_registrar_comprador/);
+  assert.match(migracionHu005Leads, /hu005_buscar_leads/);
 });
 
 test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y seguridad', async t => {
@@ -102,6 +115,14 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       return unidad;
     });
   }
+  async function asegurarEvidencia(coduni: string, medio: string, evidencia: string | null) {
+    const ruta = evidencia?.trim();
+    if (medio !== 'Transferencia' || !ruta || !ruta.startsWith(`separaciones/${coduni}/`) || ruta.includes('\n')) return;
+    await db.query(
+      "INSERT INTO storage.objects(bucket_id,name,owner) VALUES ('separaciones-evidencia',$1,auth.uid()) ON CONFLICT (bucket_id,name) DO NOTHING",
+      [ruta]
+    );
+  }
   async function crearSeparacion(
     coduni: string,
     opciones: {
@@ -120,27 +141,24 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       clave?: string;
     } = {}
   ): Promise<SeparacionResultado> {
+    const medio = opciones.medio ?? 'Transferencia';
+    const evidencia = opciones.evidencia === undefined
+      ? medio === 'Transferencia' ? `separaciones/${coduni}/OP-QA-1234.pdf` : null
+      : opciones.evidencia;
+    await asegurarEvidencia(coduni, medio, evidencia);
     const resultado = await escalar<SeparacionResultado>(
       'SELECT public.hu005_crear_separacion($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) r',
       [
-        coduni,
-        opciones.codcli ?? 1,
-        opciones.responsable ?? 3,
+        coduni, opciones.codcli ?? 1, opciones.responsable ?? 3,
         opciones.confirmador === undefined
-          ? (opciones.medio ?? 'Transferencia') === 'Transferencia' ? 1 : null
+          ? medio === 'Transferencia' ? 1 : null
           : opciones.confirmador,
-        opciones.monto ?? 250.00,
-        opciones.fecha ?? '2026-11-04',
-        opciones.medio ?? 'Transferencia',
+        opciones.monto ?? 250.00, opciones.fecha ?? '2026-11-04', medio,
         opciones.referencia === undefined ? 'OP-QA-1234' : opciones.referencia,
-        opciones.evidencia === undefined
-          ? (opciones.medio ?? 'Transferencia') === 'Transferencia' ? 'hu005/evidencias/OP-QA-1234.pdf' : null
-          : opciones.evidencia,
+        evidencia,
         opciones.observacion === undefined ? 'Ingreso verificado en cuenta' : opciones.observacion,
         opciones.confirmado === undefined ? true : opciones.confirmado,
-        opciones.clave ?? randomUUID(),
-        opciones.decisionTecho ?? 'Por definir',
-        opciones.codtte ?? null
+        opciones.clave ?? randomUUID(), opciones.decisionTecho ?? 'Por definir', opciones.codtte ?? null
       ]
     );
     const decisionTecho = opciones.decisionTecho ?? 'Por definir';
@@ -156,11 +174,13 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       clave?: string;
     } = {}
   ): Promise<SeparacionResultado> {
+    const ruta = `separaciones/${coduni}/OP-QA-1234.pdf`;
+    await asegurarEvidencia(coduni, 'Transferencia', ruta);
     return escalar<SeparacionResultado>(
       'SELECT public.hu005_crear_separacion($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) r',
       [
         coduni, 1, 3, 1, 250.00, '2026-11-04', 'Transferencia', 'OP-QA-1234',
-        'hu005/evidencias/OP-QA-1234.pdf', 'Ingreso verificado en cuenta', true,
+        ruta, 'Ingreso verificado en cuenta', true,
         opciones.clave ?? randomUUID(), opciones.decisionTecho ?? 'Por definir', opciones.codtte ?? null
       ]
     );
@@ -194,7 +214,7 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
         + "'referencia',refsep,'evidencia',rutavouchersep,'confirmador',codusuconfsep::text,"
         + "'fechaConfirmacion',fecconfsep,'estado',estsep,'idempotencia',idempotenciasep::text,"
         + "'decisionSolicitada',decisiontecho_solicitada,'tipoSolicitado',codtte_solicitado::text,"
-        + "'decision',decisiontecho,'tipo',codttecomsep::text) r FROM public.separacion WHERE codsep=$1",
+        + "'decision',dectechosep,'tipo',codttesep::text) r FROM public.separacion WHERE codsep=$1",
       [codsep]
     ));
   }
@@ -204,11 +224,16 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
   let unidadConcurrencia = '';
 
   try {
-    await db.exec("CREATE ROLE anon; CREATE ROLE authenticated; CREATE SCHEMA auth; "
+    await db.exec("CREATE ROLE anon; CREATE ROLE authenticated; CREATE SCHEMA auth; CREATE SCHEMA storage; "
       + "CREATE TABLE auth.users(id uuid PRIMARY KEY); "
       + "CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS "
       + "$$ SELECT nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$; "
-      + "GRANT USAGE ON SCHEMA public,auth TO anon,authenticated; "
+      + "CREATE TABLE storage.buckets(id text PRIMARY KEY,name text NOT NULL,public boolean DEFAULT false,file_size_limit bigint,allowed_mime_types text[]); "
+      + "CREATE TABLE storage.objects(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),bucket_id text REFERENCES storage.buckets(id),name text NOT NULL,owner uuid,UNIQUE(bucket_id,name)); "
+      + "CREATE FUNCTION storage.foldername(name text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $$ SELECT (string_to_array(name,'/'))[1:array_length(string_to_array(name,'/'),1)-1] $$; "
+      + "ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY; "
+      + "GRANT USAGE ON SCHEMA public,auth,storage TO anon,authenticated; "
+      + "GRANT SELECT,INSERT ON storage.objects TO authenticated; "
       + "GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated;");
     await db.exec(readFileSync('tests/fixtures/esquema-base.sql', 'utf8'));
     await db.exec(migracionHu026);
@@ -226,7 +251,12 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       + "GRANT USAGE,SELECT ON SEQUENCE public.separacion_codsep_seq TO authenticated;");
     await db.exec(migracionHu005);
     await db.exec(migracionHu005Confirmador);
-    await db.exec(migracionHu005TechoPrecio);
+    await db.exec(readFileSync('supabase/migrations/202611070001_hu005_comprador_evidencia.sql', 'utf8'));
+    await db.exec(migracionHu005TechoVenta);
+    await db.exec(migracionHu005DecisionTope);
+    await db.exec(migracionHu005Comprador);
+    await db.exec(migracionHu005Integracion);
+    await db.exec(migracionHu005Leads);
     await db.exec(migracionHu005CompatibilidadTecho);
 
     const authRows = uuids.map(id => "('" + id + "')").join(',');
@@ -331,11 +361,12 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       )), 0);
 
       const valida = await crearUnidad('TRANSFERENCIA-VALIDA');
+      const rutaValida = `separaciones/${valida}/OP-QA-1234.pdf`;
       const resultado = await crearSeparacion(valida, {
-        referencia: '  OP-QA-1234  ', evidencia: '  hu005/evidencias/OP-QA-1234.pdf  ', confirmado: true
+        referencia: '  OP-QA-1234  ', evidencia: `  ${rutaValida}  `, confirmado: true
       });
       assert.equal(resultado.referencia, 'OP-QA-1234');
-      assert.equal(resultado.rutaEvidencia, 'hu005/evidencias/OP-QA-1234.pdf');
+      assert.equal(resultado.rutaEvidencia, rutaValida);
       assert.equal(resultado.ingresoConfirmado, true);
     });
 
@@ -568,8 +599,8 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       const tipoInactivo = await administrativo(() => escalar<number>(
         "SELECT codtte r FROM public.tipotecho WHERE nomtte='Tipo inactivo al resolver QA'"
       ));
-      await assert.rejects(guardarTecho(separacion.codsep, 'Con techo', 999), error('PT435'));
-      await assert.rejects(guardarTecho(separacion.codsep, 'Con techo', tipoInactivo), error('PT435'));
+      await assert.rejects(guardarTecho(separacion.codsep, 'Con techo', 999), error('PT439'));
+      await assert.rejects(guardarTecho(separacion.codsep, 'Con techo', tipoInactivo), error('PT439'));
       const actual = await resumenSeparacion(separacion.codsep);
       assert.equal(actual.decision, 'Por definir');
       assert.equal(actual.tipo, null);
@@ -581,31 +612,41 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       await login(1);
       const unidadSin = await crearUnidad('FINAL-SIN-TECHO');
       const separacionSin = await crearSeparacion(unidadSin, { decisionTecho: 'Sin techo' });
-      await assert.rejects(guardarTecho(separacionSin.codsep, 'Con techo', 5), error('PT437'));
-      await assert.rejects(guardarTecho(separacionSin.codsep, 'Por definir', null), error('PT437'));
+      await assert.rejects(guardarTecho(separacionSin.codsep, 'Con techo', 5), error('PT440'));
+      await assert.rejects(guardarTecho(separacionSin.codsep, 'Por definir', null), error('PT440'));
       const igualSin = await guardarTecho(separacionSin.codsep, 'Sin techo', null);
       assert.equal(igualSin.guardado, true);
       assert.equal(igualSin.reutilizada, true);
 
       const unidadCon = await crearUnidad('FINAL-CON-TECHO');
       const separacionCon = await crearSeparacion(unidadCon, { decisionTecho: 'Con techo', codtte: 5 });
-      await assert.rejects(guardarTecho(separacionCon.codsep, 'Con techo', 4), error('PT437'));
-      await assert.rejects(guardarTecho(separacionCon.codsep, 'Sin techo', null), error('PT437'));
-      await assert.rejects(guardarTecho(separacionCon.codsep, 'Por definir', null), error('PT437'));
+      await assert.rejects(guardarTecho(separacionCon.codsep, 'Con techo', 4), error('PT440'));
+      await assert.rejects(guardarTecho(separacionCon.codsep, 'Sin techo', null), error('PT440'));
+      await assert.rejects(guardarTecho(separacionCon.codsep, 'Por definir', null), error('PT440'));
       const igualCon = await guardarTecho(separacionCon.codsep, 'Con techo', 5);
       assert.equal(igualCon.guardado, true);
       assert.equal(igualCon.reutilizada, true);
     });
 
+    await t.test('una separación inactiva devuelve PT441, separado de la decisión final PT440', async () => {
+      await login(1);
+      const unidad = await crearUnidad('SEPARACION-INACTIVA-TECHO');
+      const separacion = await crearSeparacion(unidad, { decisionTecho: 'Sin techo' });
+      await administrativo(() => db.query(
+        "UPDATE public.separacion SET estsep='Cancelada' WHERE codsep=$1", [separacion.codsep]
+      ));
+      await assert.rejects(guardarTecho(separacion.codsep, 'Sin techo', null), error('PT441'));
+    });
+
     await t.test('tipo inexistente/inactivo y decisiones contradictorias se rechazan sin crear la separación', async () => {
       await login(1);
       const unidad = await crearUnidad('TECHO-INVALIDO');
-      await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Con techo', codtte: 999 }), error('PT435'));
+      await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Con techo', codtte: 999 }), error('PT439'));
       await administrativo(() => db.query("INSERT INTO public.tipotecho(nomtte,esttte) VALUES ('Techo inactivo QA',false)"));
       const tipoInactivo = await administrativo(() => escalar<number>(
         "SELECT codtte r FROM public.tipotecho WHERE nomtte='Techo inactivo QA'"
       ));
-      await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Con techo', codtte: tipoInactivo }), error('PT435'));
+      await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Con techo', codtte: tipoInactivo }), error('PT439'));
       await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Con techo' }), error('PT400'));
       await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Sin techo', codtte: 5 }), error('PT400'));
       await assert.rejects(crearSeparacion(unidad, { decisionTecho: 'Decisión inválida' as 'Sin techo' }), error('PT400'));
@@ -627,17 +668,17 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       await administrativo(() => db.exec("CREATE FUNCTION public.hu005_test_falla_guardar_techo() "
         + "RETURNS trigger LANGUAGE plpgsql AS $$ "
         + "BEGIN RAISE EXCEPTION USING ERRCODE='PT499', MESSAGE='Fallo inducido por test'; END $$; "
-        + "CREATE TRIGGER hu005_test_falla_guardar_techo BEFORE UPDATE OF decisiontecho ON public.separacion "
+        + "CREATE TRIGGER hu005_test_falla_guardar_techo BEFORE UPDATE OF dectechosep ON public.separacion "
         + "FOR EACH ROW EXECUTE FUNCTION public.hu005_test_falla_guardar_techo();"));
       await assert.rejects(guardarTecho(separacion.codsep, 'Con techo', 5), error('PT499'));
       await administrativo(() => db.exec('DROP TRIGGER hu005_test_falla_guardar_techo ON public.separacion; '
         + 'DROP FUNCTION public.hu005_test_falla_guardar_techo();'));
 
-      const pendiente = await administrativo(() => escalar<{ estsep: string; decisiontecho: string | null; codttecomsep: string | null }>(
-        "SELECT jsonb_build_object('estsep',estsep,'decisiontecho',decisiontecho,'codttecomsep',codttecomsep::text) r "
+      const pendiente = await administrativo(() => escalar<{ estsep: string; dectechosep: string | null; codttesep: string | null }>(
+        "SELECT jsonb_build_object('estsep',estsep,'dectechosep',dectechosep,'codttesep',codttesep::text) r "
           + 'FROM public.separacion WHERE codsep=$1', [separacion.codsep]
       ));
-      assert.deepEqual(pendiente, { estsep: 'Activa', decisiontecho: null, codttecomsep: null });
+      assert.deepEqual(pendiente, { estsep: 'Activa', dectechosep: 'Por definir', codttesep: null });
       await assert.rejects(guardarTecho(separacion.codsep, 'Sin techo', null), error('PT431'),
         'el reintento de una elección definitiva pendiente debe conservar el payload original');
       const totalAntesReintento = await administrativo(() => escalar<number>(
@@ -655,7 +696,7 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       assert.equal(await administrativo(() => escalar<number>(
         'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidad]
       )), 1, 'repetir el guardado no duplica separación ni adelanto');
-      await assert.rejects(guardarTecho(separacion.codsep, 'Sin techo', null), error('PT437'));
+      await assert.rejects(guardarTecho(separacion.codsep, 'Sin techo', null), error('PT440'));
     });
 
     await t.test('el monto igual al precio de lista se acepta; uno mayor revierte separación y unidad', async () => {
@@ -667,7 +708,7 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
 
       const unidadExcedida = await crearUnidad('MONTO-SUPERIOR');
       const antes = await operativo(unidadExcedida);
-      await assert.rejects(crearSeparacion(unidadExcedida, { monto: 250.01 }), error('PT434'));
+      await assert.rejects(crearSeparacion(unidadExcedida, { monto: 250.01 }), error('PT435'));
       assert.deepEqual(await operativo(unidadExcedida), antes);
       assert.equal(await administrativo(() => escalar<number>(
         'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidadExcedida]
@@ -726,12 +767,17 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       const unidadSeparadaSinFila = await crearUnidad('SEPARADA-ESTADO', 'Separada');
       await assert.rejects(crearSeparacion(unidadSeparadaSinFila), error('PT429'));
 
+      const rutaDuplicada = `separaciones/${unidadConSeparacion}/duplicado.pdf`;
+      await administrativo(() => db.query(
+        "INSERT INTO storage.objects(bucket_id,name,owner) VALUES ('separaciones-evidencia',$1,$2)",
+        [rutaDuplicada, uuids[0]]
+      ));
       await assert.rejects(administrativo(() => db.query(
         "INSERT INTO public.separacion(coduni,codcli,codusu,codusuresp,monadesep,fecpagsep,metpagsep,"
           + "refsep,rutavouchersep,obssep,ingconfsep,codusuconfsep,fecconfsep,idempotenciasep,estsep) "
-          + "VALUES ($1,1,1,3,20,'2026-11-04','Transferencia','OP-DUP','hu005/evidencias/duplicado.pdf',"
+          + "VALUES ($1,1,1,3,20,'2026-11-04','Transferencia','OP-DUP',$3,"
           + "'QA',true,1,now(),$2,'Activa')",
-        [unidadConSeparacion, randomUUID()]
+        [unidadConSeparacion, randomUUID(), rutaDuplicada]
       )), error('23505'));
     });
 
@@ -757,7 +803,7 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
       assert.equal(repetida.confirmadoPor, primera.confirmadoPor);
       assert.equal(repetida.reutilizada, true);
       await assert.rejects(crearSeparacion(unidad, { clave, monto: 251 }), error('PT431'));
-      await assert.rejects(crearSeparacion(unidad, { clave, evidencia: 'hu005/evidencias/otra.pdf' }), error('PT431'));
+      await assert.rejects(crearSeparacion(unidad, { clave, evidencia: `separaciones/${unidad}/otra.pdf` }), error('PT431'));
       await assert.rejects(crearSeparacion(unidad, { clave, confirmador: 5 }), error('PT431'));
       await assert.rejects(crearSeparacion(unidad, { clave, decisionTecho: 'Sin techo' }), error('PT431'));
       await assert.rejects(crearSeparacion(unidad, { clave, decisionTecho: 'Con techo', codtte: 5 }), error('PT431'));

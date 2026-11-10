@@ -54,13 +54,16 @@ export function unidadDesdeApi(x = {}) {
   const prep = x.preparacion?.nomepr || "";
   // HU-033: preparación guardada por etapas (armado y techo); si no llega, la del Sprint 1
   const po = x.preparacionOperativa && typeof x.preparacionOperativa === "object" ? x.preparacionOperativa : null;
+  const comercial = COMERCIAL_API[x.situacionComercial] || x.situacionComercial || "Sin dato";
+  const preparacion = po ? preparacionDesdeOperativa(po, x.techo?.nomtte) : { central: true, estado: prep, lista_para_entrega: /lista para entrega/i.test(prep), techo: { configuracion: x.techo?.nomtte || "" } };
+  // HU-005: una moto separada sin techo configurado tiene el techo «Por definir» (el comprador aún no decide)
+  if (comercial === "Separada" && !preparacion.techo?.configuracion) preparacion.techo = { ...preparacion.techo, porDefinir: true };
   return {
     coduni: String(x.coduni), codmod: x.modelo?.codmod ? String(x.modelo.codmod) : "", nommod: x.modelo?.nommod || "",
     coluni: x.color || "", nummotuni: x.nummotuni || "", chauni: x.chauni || "",
     ubicacion: x.ubicacionConfirmada || null,
     movimiento_activo: x.movimientoActivo ? { ...x.movimientoActivo, origen: x.ubicacionConfirmada || null } : null,
-    comercial: COMERCIAL_API[x.situacionComercial] || x.situacionComercial || "Sin dato",
-    preparacion: po ? preparacionDesdeOperativa(po, x.techo?.nomtte) : { central: true, estado: prep, lista_para_entrega: /lista para entrega/i.test(prep), techo: { configuracion: x.techo?.nomtte || "" } },
+    comercial, preparacion,
   };
 }
 async function paginas(ruta, params, items) {

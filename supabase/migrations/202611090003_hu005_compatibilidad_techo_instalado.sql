@@ -1,5 +1,7 @@
 BEGIN;
 
+-- HU-005 · Delta final de compatibilidad física. Presupone la cadena
+-- develop 202611080001–003 y la integración 202611090001.
 -- La configuración de unidad.codtte solo cuenta como techo instalado cuando
 -- HU-033 confirma preparacionunidad.esttecho = 'Instalado'.
 CREATE OR REPLACE FUNCTION public.hu005_validar_compatibilidad_techo_instalado(
@@ -137,16 +139,16 @@ BEGIN
       RAISE EXCEPTION USING ERRCODE = 'PT436', MESSAGE = 'La unidad no tiene un precio de lista configurado';
     END IF;
     IF p_monadesep > v_precio_lista THEN
-      RAISE EXCEPTION USING ERRCODE = 'PT434', MESSAGE = 'El adelanto supera el precio de lista de la unidad';
+      RAISE EXCEPTION USING ERRCODE = 'PT435', MESSAGE = 'El adelanto supera el precio de lista de la unidad';
     END IF;
   END IF;
 
-  IF v_separacion.decisiontecho IS NULL AND v_decision = 'Con techo' THEN
+  IF NOT v_reutilizada AND v_decision = 'Con techo' THEN
     PERFORM 1 FROM public.tipotecho
     WHERE codtte = p_codttecomsep AND esttte
     FOR SHARE;
     IF NOT FOUND THEN
-      RAISE EXCEPTION USING ERRCODE = 'PT435', MESSAGE = 'El tipo de techo no existe o está inactivo';
+      RAISE EXCEPTION USING ERRCODE = 'PT439', MESSAGE = 'El tipo de techo no existe o está inactivo';
     END IF;
   END IF;
 
@@ -160,30 +162,43 @@ BEGIN
     UPDATE public.separacion
     SET decisiontecho_solicitada = v_decision,
         codtte_solicitado = p_codttecomsep,
-        decisiontecho = CASE WHEN v_decision = 'Por definir' THEN v_decision ELSE decisiontecho END,
-        codttecomsep = CASE WHEN v_decision = 'Por definir' THEN NULL ELSE codttecomsep END
+        dectechosep = CASE WHEN v_decision = 'Por definir' THEN v_decision ELSE dectechosep END,
+        codttesep = CASE WHEN v_decision = 'Por definir' THEN NULL ELSE codttesep END,
+        fecdectechosep = CASE WHEN v_decision = 'Por definir' THEN now() ELSE fecdectechosep END,
+        codusudectechosep = CASE WHEN v_decision = 'Por definir' THEN v_autor ELSE codusudectechosep END
     WHERE codsep = v_separacion.codsep;
     v_separacion.decisiontecho_solicitada := v_decision;
     v_separacion.codtte_solicitado := p_codttecomsep;
     IF v_decision = 'Por definir' THEN
-      v_separacion.decisiontecho := v_decision;
-      v_separacion.codttecomsep := NULL;
+      v_separacion.dectechosep := v_decision;
+      v_separacion.codttesep := NULL;
     END IF;
-  ELSIF v_decision = 'Por definir' AND v_separacion.decisiontecho IS NULL THEN
+  ELSIF v_decision = 'Por definir' AND v_separacion.dectechosep IS NULL THEN
     -- Por definir no necesita un segundo paso de guardado: no representa una
     -- opción final elegida por el comprador y queda resoluble en una llamada futura.
     UPDATE public.separacion
-    SET decisiontecho = 'Por definir', codttecomsep = NULL
+    SET dectechosep = 'Por definir', codttesep = NULL,
+        fecdectechosep = now(), codusudectechosep = v_autor
     WHERE codsep = v_separacion.codsep;
-    v_separacion.decisiontecho := 'Por definir';
-    v_separacion.codttecomsep := NULL;
+    v_separacion.dectechosep := 'Por definir';
+    v_separacion.codttesep := NULL;
   END IF;
 
   RETURN v_resultado || pg_catalog.jsonb_build_object(
     'techo', pg_catalog.jsonb_build_object(
-      'decision', COALESCE(v_separacion.decisiontecho, v_separacion.decisiontecho_solicitada),
-      'codtte', COALESCE(v_separacion.codttecomsep, v_separacion.codtte_solicitado)::text,
-      'guardado', v_separacion.decisiontecho IS NOT NULL
+      'decision', CASE
+        WHEN v_separacion.decisiontecho_solicitada = 'Por definir'
+          OR v_separacion.dectechosep = v_separacion.decisiontecho_solicitada
+          THEN v_separacion.dectechosep
+        ELSE v_separacion.decisiontecho_solicitada END,
+      'codtte', COALESCE(v_separacion.codttesep, v_separacion.codtte_solicitado)::text,
+      'guardado', CASE
+        WHEN v_separacion.decisiontecho_solicitada = 'Por definir'
+          THEN v_separacion.dectechosep IS NOT NULL
+        ELSE v_separacion.dectechosep = v_separacion.decisiontecho_solicitada
+          AND (v_separacion.dectechosep <> 'Con techo'
+            OR v_separacion.codttesep IS NOT DISTINCT FROM v_separacion.codtte_solicitado)
+        END
     )
   );
 END;
@@ -233,18 +248,24 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = 'PT404', MESSAGE = 'Separación inexistente';
   END IF;
   IF v_separacion.estsep <> 'Activa' THEN
-    RAISE EXCEPTION USING ERRCODE = 'PT437', MESSAGE = 'La separación ya no está activa';
+    RAISE EXCEPTION USING ERRCODE = 'PT441', MESSAGE = 'La separación ya no está activa';
   END IF;
-  IF v_separacion.decisiontecho IS NOT NULL THEN
-    IF v_separacion.decisiontecho = 'Por definir' THEN
+  IF v_separacion.dectechosep IS NOT NULL THEN
+    IF v_separacion.dectechosep = 'Por definir' THEN
       -- Por definir es una decisión guardada, pero sigue siendo resoluble.
       -- Puede permanecer igual o convertirse en una elección definitiva.
+      IF v_separacion.decisiontecho_solicitada IS NOT NULL
+        AND v_separacion.decisiontecho_solicitada <> 'Por definir'
+        AND (v_separacion.decisiontecho_solicitada IS DISTINCT FROM v_decision
+          OR v_separacion.codtte_solicitado IS DISTINCT FROM p_codttecomsep) THEN
+        RAISE EXCEPTION USING ERRCODE = 'PT431', MESSAGE = 'La decisión no coincide con la elección pendiente';
+      END IF;
       IF v_decision = 'Con techo' THEN
         PERFORM 1 FROM public.tipotecho
         WHERE codtte = p_codttecomsep AND esttte
         FOR SHARE;
         IF NOT FOUND THEN
-          RAISE EXCEPTION USING ERRCODE = 'PT435', MESSAGE = 'El tipo de techo no existe o está inactivo';
+          RAISE EXCEPTION USING ERRCODE = 'PT439', MESSAGE = 'El tipo de techo no existe o está inactivo';
         END IF;
       END IF;
       IF v_decision = 'Por definir' THEN
@@ -254,15 +275,17 @@ BEGIN
           v_separacion.coduni, v_decision, p_codttecomsep
         );
         UPDATE public.separacion
-        SET decisiontecho = v_decision,
-            codttecomsep = p_codttecomsep
+        SET dectechosep = v_decision,
+            codttesep = p_codttecomsep,
+            fecdectechosep = now(),
+            codusudectechosep = v_autor
         WHERE codsep = p_codsep;
       END IF;
-    ELSIF v_separacion.decisiontecho IS DISTINCT FROM v_decision
-      OR v_separacion.codttecomsep IS DISTINCT FROM p_codttecomsep THEN
+    ELSIF v_separacion.dectechosep IS DISTINCT FROM v_decision
+      OR v_separacion.codttesep IS DISTINCT FROM p_codttecomsep THEN
       -- Una vez elegida una opción definitiva, solo se permite reintentarla
       -- exactamente igual; cualquier cambio requiere otro flujo de negocio.
-      RAISE EXCEPTION USING ERRCODE = 'PT437', MESSAGE = 'La elección de techo ya fue guardada con otros datos';
+      RAISE EXCEPTION USING ERRCODE = 'PT440', MESSAGE = 'La elección de techo ya fue guardada con otros datos';
     ELSE
       v_reutilizada := true;
     END IF;
@@ -280,7 +303,7 @@ BEGIN
       WHERE codtte = p_codttecomsep AND esttte
       FOR SHARE;
       IF NOT FOUND THEN
-        RAISE EXCEPTION USING ERRCODE = 'PT435', MESSAGE = 'El tipo de techo no existe o está inactivo';
+        RAISE EXCEPTION USING ERRCODE = 'PT439', MESSAGE = 'El tipo de techo no existe o está inactivo';
       END IF;
     END IF;
     PERFORM public.hu005_validar_compatibilidad_techo_instalado(
@@ -289,8 +312,10 @@ BEGIN
     UPDATE public.separacion
     SET decisiontecho_solicitada = v_decision,
         codtte_solicitado = p_codttecomsep,
-        decisiontecho = v_decision,
-        codttecomsep = p_codttecomsep
+        dectechosep = v_decision,
+        codttesep = p_codttecomsep,
+        fecdectechosep = now(),
+        codusudectechosep = v_autor
     WHERE codsep = p_codsep;
   END IF;
 
@@ -316,4 +341,6 @@ REVOKE ALL ON FUNCTION public.hu005_guardar_techo_separacion(bigint,text,bigint)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.hu005_guardar_techo_separacion(bigint,text,bigint)
   TO authenticated;
+REVOKE ALL ON FUNCTION public.hu005_elegir_techo(bigint,bigint) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.hu005_elegir_techo(bigint,bigint) TO authenticated;
 COMMIT;

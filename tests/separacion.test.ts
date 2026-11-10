@@ -192,7 +192,7 @@ test('HU-005 API: el precio de lista limita el adelanto en PostgreSQL y se expon
   assert.equal(llamadas[0]?.nombre, 'hu005_crear_separacion');
   assert.equal((llamadas[0]?.parametros as Record<string, unknown>).p_monadesep, 250.01);
   assert.ok(!JSON.stringify(respuesta.body).includes('privado'));
-}, () => errorRPC('PT434')));
+}, () => errorRPC('PT435')));
 
 test('HU-005 API: acepta las tres decisiones válidas y valida el tipo antes de crear', async () => entorno(async (request, llamadas) => {
   for (const techo of [{ decision: 'Por definir' }, { decision: 'Sin techo' }, { decision: 'Con techo', codtte: 2 }]) {
@@ -245,7 +245,7 @@ test('HU-005 API: PUT resuelve Por definir a Sin techo o Con techo sin crear otr
       assert.equal(nombre, 'hu005_guardar_techo_separacion');
       const p = parametros as { p_decisiontecho: string; p_codttecomsep: string | null };
       if (decisionActual !== 'Por definir'
-        && (p.p_decisiontecho !== decisionActual || p.p_codttecomsep !== tipoActual)) return errorRPC('PT437');
+        && (p.p_decisiontecho !== decisionActual || p.p_codttecomsep !== tipoActual)) return errorRPC('PT440');
       decisionActual = p.p_decisiontecho;
       tipoActual = p.p_codttecomsep;
       return { data: { codsep: '123', decision: decisionActual, codtte: tipoActual, guardado: true, reutilizada: false }, error: null };
@@ -326,7 +326,7 @@ test('HU-005 API: PUT rechaza cambiar una elección final con HTTP 409', async (
   const respuesta = await request({ decision: 'Con techo', codtte: 3 }, 'gerente', {}, '123', 'PUT');
   assert.equal(respuesta.status, 409);
   assert.deepEqual(llamadas.map(llamada => llamada.nombre), ['hu005_guardar_techo_separacion']);
-}, () => errorRPC('PT437')));
+}, () => errorRPC('PT440')));
 
 test('HU-005 API: fallo al guardar techo informa separación parcial y permite reintento sin recrearla', async () => {
   let fallaPrimeraVez = true;
@@ -441,13 +441,24 @@ for (const [code, status] of [
   ['42501', 403], ['PT400', 400], ['PT404', 404], ['PT407', 422], ['PT426', 422],
   ['PT427', 422], ['PT428', 422], ['PT429', 409], ['PT430', 409], ['PT431', 409],
   ['PT432', 422], ['PT433', 422], ['PT434', 422], ['PT435', 422], ['PT436', 422],
-  ['PT437', 409], ['PT438', 409], ['XX000', 500]
+  ['PT437', 422], ['PT438', 409], ['PT439', 422], ['PT440', 409], ['PT441', 409], ['XX000', 500]
 ] as const) {
   test(`HU-005 API: error RPC ${code} devuelve ${status} sin filtrar detalles`, async () => entorno(async request => {
     const respuesta = await request();
     assert.equal(respuesta.status, status);
     if (code === 'PT438') assert.equal(respuesta.body.message,
       'La elección de techo no es compatible con el techo instalado en esta unidad');
+    const mensajes: Record<string, string> = {
+      PT434: 'La captura de la transferencia no está guardada o no corresponde a esta moto',
+      PT435: 'El adelanto no puede superar el precio de lista de la moto',
+      PT436: 'La moto no tiene precio de lista registrado; regístralo en Modelos antes de separar',
+      PT437: 'La fecha del adelanto no puede ser de hace más de 30 días',
+      PT438: 'La elección de techo no es compatible con el techo instalado en esta unidad',
+      PT439: 'El tipo de techo no existe o está inactivo',
+      PT440: 'La elección de techo ya está guardada y no se puede modificar',
+      PT441: 'La separación ya no está activa'
+    };
+    if (mensajes[code]) assert.equal(respuesta.body.message, mensajes[code]);
     assert.ok(!JSON.stringify(respuesta.body).includes('privado'));
     assert.ok(!JSON.stringify(respuesta.body).includes('secreto'));
   }, () => errorRPC(code)));

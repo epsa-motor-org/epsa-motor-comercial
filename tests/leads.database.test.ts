@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 
 const migracion = readFileSync('supabase/migrations/202610090001_hu014_registro_lead_manual.sql', 'utf8');
 const correccion = readFileSync('supabase/migrations/202610100001_hu014_modelo_publicado.sql', 'utf8');
-const busquedaHu005 = readFileSync('supabase/migrations/202611090001_hu005_buscar_leads.sql', 'utf8');
+const busquedaHu005 = readFileSync('supabase/migrations/202611090002_hu005_buscar_leads.sql', 'utf8');
 const sinHttp407 = readFileSync('supabase/migrations/202610310001_hu015_responsable_sin_http_407.sql', 'utf8');
 test('HU014 PostgreSQL: migración, reglas comerciales, atomicidad y seguridad', async t => {
   const db = new PGlite();

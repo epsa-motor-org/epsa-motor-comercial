@@ -123,8 +123,8 @@ export function TextoTecho({ preparacion }) {
   const t = techoDe(preparacion);
   return (
     <span className="block">
-      <span className={`block ${t.config === "Por definir" ? "text-slate-400" : ""}`}>{t.config}{t.proveedor ? <span className="text-slate-400">, {t.proveedor}</span> : null}</span>
-      {t.requiereInstalacion && <span className={`mt-0.5 block w-fit rounded-full px-2 py-0.5 text-[11px] font-semibold ${t.avance === "Instalado" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>{t.avance === "Instalado" ? "Instalado" : t.avance === "En proceso" ? "Instalación en proceso" : "Falta instalar"}</span>}
+      <span className={`block ${t.config === "Sin techo" ? "text-slate-500" : t.config === "Por definir" ? "text-amber-700 dark:text-amber-300" : ""}`}>{t.config}{t.proveedor ? <span className="text-slate-400">, {t.proveedor}</span> : null}</span>
+      {t.requiereInstalacion && <span className={`mt-0.5 block w-fit rounded-full px-2 py-0.5 text-[11px] font-semibold ${t.avance === "Instalado" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>{t.avance === "Instalado" ? "Instalado" : t.avance === "En proceso" ? "En armado" : "Por armar"}</span>}
     </span>
   );
 }

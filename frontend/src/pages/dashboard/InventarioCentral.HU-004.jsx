@@ -1,7 +1,7 @@
 // HU-004 · Inventario de unidades (base central) · HU-001 lectura compartida, HU-003 movimientos
 // Lista operativa de todas las unidades identificadas: ubicación, preparación, techo y situación comercial.
 // No hay copias por navegador: lo que se ve aquí es lo mismo que ven las demás cuentas.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { Link } from "../../components/dashboard/LinkPanel";
 import { useAuth } from "../../context/AuthContext";
@@ -9,19 +9,27 @@ import { inventarioApi, useConsultaCentral } from "../../servicios/central";
 import { ETAPAS_FILTRO_CENTRAL, FILTRO_INICIAL, GRUPOS_LUGAR_API, filtrarUnidades } from "../../servicios/inventarioCentral";
 import { Card, PageHeader, Stat, Tabla, Vacio, btnMini } from "../../components/ui";
 import { EstadoConexion } from "../../components/dashboard/Sprint2";
-import { AbrirPorNumero, AvisoConexion, MotosPorIdentificar, nombreUnidad, sinApi, BarraActualizacion, ColorUnidad, PillComercial, PillPreparacion, TextoTecho, TextoUbicacion } from "../../components/dashboard/Central";
+import { AbrirPorNumero, AvisoConexion, nombreUnidad, sinApi, BarraActualizacion, ColorUnidad, PillComercial, PillPreparacion, TextoTecho, TextoUbicacion } from "../../components/dashboard/Central";
 import { ModalTrasladoCentral, ModalUbicacionInicial } from "../../components/dashboard/ModalesCentral";
 
 const POR_PAGINA = 20;
+// Filtros y página se recuerdan en esta pestaña del navegador (igual que en Disponibilidad): al volver desde la
+// ficha de una moto, con el botón «Volver» o con la flecha del navegador, la lista sigue filtrada igual
+const CLAVE_FILTROS = "epsa-filtros-inventario";
+function leerFiltros() {
+  try { return JSON.parse(sessionStorage.getItem(CLAVE_FILTROS) || "null") || {}; } catch { return {}; }
+}
 
 export default function InventarioCentral() {
   const { puede } = useAuth();
   const gestiona = puede("unidades.gestionar");
   const { state } = useLocation();
-  const [servidor, setServidor] = useState({ codubi: state?.codubi || "", codmod: "" });
-  const [f, setF] = useState({ ...FILTRO_INICIAL, comercial: "" });
-  const [sinUbicacion, setSinUbicacion] = useState(false);
-  const [pag, setPag] = useState(1);
+  const guardado = useMemo(leerFiltros, []);
+  const [servidor, setServidor] = useState({ codubi: state?.codubi || guardado.servidor?.codubi || "", codmod: state?.codubi ? "" : guardado.servidor?.codmod || "" });
+  const [f, setF] = useState({ ...FILTRO_INICIAL, comercial: "", ...(state?.codubi ? {} : guardado.f) });
+  const [sinUbicacion, setSinUbicacion] = useState(state?.codubi ? false : Boolean(guardado.sinUbicacion));
+  const [pag, setPag] = useState(state?.codubi ? 1 : Number(guardado.pag) || 1);
+  useEffect(() => { try { sessionStorage.setItem(CLAVE_FILTROS, JSON.stringify({ servidor, f, sinUbicacion, pag })); } catch { /* sin almacenamiento */ } }, [servidor, f, sinUbicacion, pag]);
   const [modal, setModal] = useState(null);
   // La ubicación se pide al servidor; el modelo se filtra aquí, para que la lista de modelos muestre siempre todos
   const consulta = useConsultaCentral(() => inventarioApi({ codubi: servidor.codubi }), [servidor.codubi], { clave: `inventario:${servidor.codubi || ""}:` });
@@ -36,9 +44,13 @@ export default function InventarioCentral() {
     return [...m.values()].sort((a, b) => a.nommod.localeCompare(b.nommod, "es"));
   }, [todas]);
   const lista = useMemo(() => filtrarUnidades(unidades, f).filter((u) => !sinUbicacion || !u.ubicacion), [unidades, f, sinUbicacion]);
-  useEffect(() => { setPag(1); }, [servidor.codubi, servidor.codmod, f, sinUbicacion]);
+  // Cambiar un filtro vuelve a la página 1 (al volver a la lista con los mismos filtros se conserva la página)
+  const firmaFiltros = JSON.stringify([servidor, f, sinUbicacion]);
+  const filtrosAntes = useRef(firmaFiltros);
+  useEffect(() => { if (filtrosAntes.current !== firmaFiltros) { filtrosAntes.current = firmaFiltros; setPag(1); } }, [firmaFiltros]);
   const paginas = Math.max(1, Math.ceil(lista.length / POR_PAGINA));
-  const visibles = lista.slice((pag - 1) * POR_PAGINA, pag * POR_PAGINA);
+  const pagina = Math.min(pag, paginas);
+  const visibles = lista.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA);
   const cambiar = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const limpiar = () => { setServidor({ codubi: "", codmod: "" }); setF({ ...FILTRO_INICIAL, comercial: "" }); setSinUbicacion(false); };
   const cuenta = (fn) => unidades.filter(fn).length;
@@ -61,7 +73,6 @@ export default function InventarioCentral() {
         {puede("compras.registrar") && <Link className="btn btn-primary !py-2.5" to="/admin/compras">Compras e identificación</Link>}
       </PageHeader>
       <AvisoConexion consulta={consulta} que="el inventario central" />
-      <MotosPorIdentificar />
 
       <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-5">
         <Stat etiqueta="Unidades" valor={unidades.length} nota={servidor.codubi || servidor.codmod ? "Con el filtro de ubicación o modelo" : "Identificadas en total"} />
@@ -107,8 +118,8 @@ export default function InventarioCentral() {
           </Tabla>
           {lista.length > POR_PAGINA && (
             <div className="mt-4 flex items-center justify-between text-[13px] text-slate-500">
-              <span>{lista.length} unidades, página {pag} de {paginas}</span>
-              <div className="flex gap-2"><button disabled={pag === 1} className={btnMini} onClick={() => setPag(pag - 1)}>Anterior</button><button disabled={pag === paginas} className={btnMini} onClick={() => setPag(pag + 1)}>Siguiente</button></div>
+              <span>{lista.length} unidades, página {pagina} de {paginas}</span>
+              <div className="flex gap-2"><button disabled={pagina === 1} className={btnMini} onClick={() => setPag(pagina - 1)}>Anterior</button><button disabled={pagina === paginas} className={btnMini} onClick={() => setPag(pagina + 1)}>Siguiente</button></div>
             </div>
           )}
         </>

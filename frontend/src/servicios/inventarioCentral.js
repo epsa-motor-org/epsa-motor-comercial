@@ -21,11 +21,13 @@ export function ubicacionDe(u) {
 // Techo: configuración (HU-004) y avance de su instalación (HU-033), por separado
 export function techoDe(p) {
   const t = p?.techo || {};
-  const config = t.configuracion || "Por definir";
-  const avance = t.avance || "Por definir";
+  // La moto se vende con o sin techo: sin un techo elegido, se muestra «Sin techo». Si está separada y el comprador
+  // aún no decide, «Por definir» (HU-005)
+  const config = t.configuracion || (t.porDefinir ? "Por definir" : "Sin techo");
+  const avance = t.configuracion ? t.avance || "Pendiente" : t.porDefinir ? "Por definir" : "No requiere";
   return {
     config, proveedor: t.proveedor || "", detalle: t.detalle || "", avance,
-    requiereInstalacion: !["Por definir", "No requiere"].includes(avance),
+    requiereInstalacion: config !== "Sin techo" && !["Por definir", "No requiere"].includes(avance),
     conTecho: Boolean(t.configuracion && t.configuracion !== "Sin techo"),
   };
 }
@@ -47,19 +49,19 @@ export function preparacionDe(p) {
 
 export const ETAPAS_FILTRO = ["Pendiente de armado", "Techo por definir", "Falta instalar techo", "Techo en proceso", "Por confirmar entrega", "Lista para entrega"];
 // Con la base central (HU-033 de Michelle) la entrega no se marca a mano: está lista cuando se cumplen sus etapas
-export const ETAPAS_FILTRO_CENTRAL = ["Pendiente de armado", "Techo por definir", "Falta instalar techo", "Techo en proceso", "Lista para entrega"];
+// La moto se vende con o sin techo: solo el techo que eligió el cliente y falta armar queda pendiente
+export const ETAPAS_FILTRO_CENTRAL = ["Pendiente de armado del techo", "Techo en armado", "Lista para entrega"];
 
-// HU-033 · Etapa visible a partir de la preparación guardada (armado, techo y condiciones que faltan)
+// HU-033 · Etapa visible a partir de la preparación guardada. La moto se vende con o sin techo: solo queda
+// pendiente el techo que eligió el cliente al separar y que falta armar (instalar).
+export const techoPorArmar = (po) => Boolean(po?.techo?.configuracion && po.techo.requiereInstalacion && po.techo.estado !== "Instalado");
 export function etapaOperativa(po) {
   if (!po) return { etapa: "Sin registrar", tono: "gris", nota: "" };
   const t = po.techo || {};
-  const nota = (po.condicionesFaltantes || []).join(". ");
-  if (po.preparacionCompleta) return { etapa: "Lista para entrega", tono: "verde", nota: "Cumple todas las etapas. No equivale a entregada al comprador." };
-  if (po.armado !== "Terminado") return { etapa: "Pendiente de armado", tono: "ambar", nota };
-  if (!t.configuracion) return { etapa: "Techo por definir", tono: "ambar", nota };
-  if (t.estado === "En proceso") return { etapa: "Techo en proceso", tono: "celeste", nota };
-  if (t.requiereInstalacion && t.estado !== "Instalado") return { etapa: "Falta instalar techo", tono: "celeste", nota };
-  return { etapa: "Revisar techo", tono: "ambar", nota };
+  if (techoPorArmar(po)) return t.estado === "En proceso"
+    ? { etapa: "Techo en armado", tono: "celeste", nota: t.configuracion }
+    : { etapa: "Pendiente de armado del techo", tono: "ambar", nota: t.configuracion };
+  return { etapa: "Lista para entrega", tono: "verde", nota: "" };
 }
 // Preparación de la base central en la forma que usan las pantallas
 export function preparacionDesdeOperativa(po, nomtte) {
@@ -67,9 +69,9 @@ export function preparacionDesdeOperativa(po, nomtte) {
   const t = po?.techo || {};
   const config = t.configuracion || nomtte || "";
   return {
-    central: true, operativa: po, estado: e.etapa, nota: e.nota, lista_para_entrega: Boolean(po?.preparacionCompleta),
+    central: true, operativa: po, estado: e.etapa, nota: e.nota, lista_para_entrega: Boolean(po) && !techoPorArmar(po),
     armado: po?.armado === "Terminado" ? "Armado terminado" : "Pendiente de armado",
-    techo: { configuracion: config, avance: config ? t.estado || "Pendiente" : "Por definir", proveedor: po?.proveedorTecho || "", detalle: po?.detalleTecho || "" },
+    techo: { configuracion: config, avance: config ? t.estado || "Pendiente" : "No requiere", proveedor: po?.proveedorTecho || "", detalle: po?.detalleTecho || "" },
   };
 }
 
@@ -84,7 +86,7 @@ export function filtrarUnidades(lista = [], f = FILTRO_INICIAL) {
     if (f.techo === "sin" && t.config !== "Sin techo") return false;
     if (f.techo === "con" && !t.conTecho) return false;
     if (f.techo === "definir" && t.config !== "Por definir") return false;
-    if (f.prep && preparacionDe(u.preparacion).etapa !== f.prep) return false;
+    if (f.prep && ETAPAS_FILTRO_CENTRAL.includes(f.prep) && preparacionDe(u.preparacion).etapa !== f.prep) return false;
     if (f.comercial === "activas" && u.comercial === "Vendida") return false;
     if (f.comercial && f.comercial !== "activas" && u.comercial !== f.comercial) return false;
     if (q && !`${u.coduni} ${u.nummotuni} ${u.chauni} ${u.nommod}`.toLowerCase().includes(q)) return false;
