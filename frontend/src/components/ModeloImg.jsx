@@ -4,8 +4,15 @@ import MotoIllustration from "./MotoIllustration";
 import { filtroEntre } from "../data/mockData";
 
 export function fotoDeColor(modelo, color) {
-  // HU-036: foto central subida o enlazada por HTTPS, tal cual (no se pinta otro color encima)
-  if (modelo.sinTinte) return { src: modelo.imagenApi || modelo.imagen, filtro: "" };
+  // HU-036: foto central subida o enlazada por HTTPS, tal cual (no se pinta otro color encima). Si se eligió un
+  // color, se muestra la foto oficial de ese color; si no la hay, la oficial de otro color con su tono.
+  if (modelo.sinTinte) {
+    const fotos = modelo.fotosColor || {};
+    if (color && fotos[color]) return { src: fotos[color], filtro: "" };
+    const otra = color ? Object.entries(fotos).find(([, u]) => u) : null;
+    if (otra) return { src: otra[1], filtro: filtroEntre(otra[0], color) };
+    return { src: modelo.imagenApi || modelo.imagen, filtro: "" };
+  }
   const c = color || modelo.colorPortada || modelo.colores?.[0];
   const propia = c && modelo.fotosColor?.[c];
   if (propia) return { src: propia, filtro: "" };

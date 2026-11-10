@@ -92,13 +92,32 @@ function unirSedes(api, ubicaciones) {
 }
 
 // Proveedor de datos
+// Último catálogo público confirmado (modelos y sedes): la web lo muestra al instante al volver a entrar y lo
+// actualiza en segundo plano. Así no espera a que la API despierte (Render tarda en la primera consulta).
+const CLAVE_CATALOGO = "epsa-catalogo-web-v1";
+const VIGENCIA_CATALOGO = 7 * 24 * 3600 * 1000;
+function catalogoGuardado() {
+  if (!MODO_REAL) return null;
+  try {
+    const g = JSON.parse(localStorage.getItem(CLAVE_CATALOGO) || "null");
+    if (g && Array.isArray(g.modelos) && Date.now() - Number(g.t || 0) < VIGENCIA_CATALOGO) return g;
+  } catch { /* sin almacenamiento local */ }
+  return null;
+}
+function guardarCatalogo(parte) {
+  try {
+    const previo = JSON.parse(localStorage.getItem(CLAVE_CATALOGO) || "null") || {};
+    localStorage.setItem(CLAVE_CATALOGO, JSON.stringify({ ...previo, ...parte, t: Date.now() }));
+  } catch { /* sin almacenamiento local o lleno: se sigue sin copia */ }
+}
+
 export function AppProvider({ children }) {
   const [s, setS] = useState(cargar);
-  const [apiModelos, setApiModelos] = useState(null);
+  const [apiModelos, setApiModelos] = useState(() => catalogoGuardado()?.modelos ?? null);
   // Estado del catálogo central en la web: «cargando» hasta la primera respuesta, «error» si la primera lectura falla
   // (después de una lectura correcta, un fallo deja el último catálogo confirmado y se reintenta solo)
   const [catalogoError, setCatalogoError] = useState(null);
-  const [apiSedes, setApiSedes] = useState(null);
+  const [apiSedes, setApiSedes] = useState(() => catalogoGuardado()?.sedes ?? null);
   const guardado = useRef("");
 
   // Guardar cambios en el navegador
@@ -126,8 +145,8 @@ export function AppProvider({ children }) {
   const refrescarWeb = useCallback(() => {
     if (!MODO_REAL) return Promise.resolve();
     return Promise.all([
-      modelosPublicos().then((r) => { setApiModelos(Array.isArray(r.data) ? r.data : []); setCatalogoError(null); }).catch((e) => setCatalogoError(e || new Error("Sin respuesta"))),
-      sedesPublicasApi().then((r) => setApiSedes(Array.isArray(r.data) ? r.data : null)).catch(() => {}),
+      modelosPublicos().then((r) => { const lista = Array.isArray(r.data) ? r.data : []; setApiModelos(lista); setCatalogoError(null); guardarCatalogo({ modelos: lista }); }).catch((e) => setCatalogoError(e || new Error("Sin respuesta"))),
+      sedesPublicasApi().then((r) => { const lista = Array.isArray(r.data) ? r.data : null; setApiSedes(lista); if (lista) guardarCatalogo({ sedes: lista }); }).catch(() => {}),
     ]);
   }, []);
   useEffect(() => { refrescarWeb(); }, [refrescarWeb]);

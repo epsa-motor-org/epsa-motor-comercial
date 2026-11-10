@@ -77,7 +77,7 @@ function ModeloDetalle({ id }) {
               <div className="relative overflow-hidden rounded-3xl bg-escenario p-4 sm:p-8 dark:bg-escenario-oscuro">
                 <div className="pointer-events-none absolute inset-x-[15%] bottom-[10%] h-[12%] rounded-[50%] bg-marino/10 blur-2xl dark:bg-black/40" aria-hidden="true" />
                 {foto ? <img src={foto.src} alt={`${m.nombre}${foto.color ? ` color ${foto.color}` : ""}`} referrerPolicy="no-referrer" className="relative mx-auto aspect-[4/3] w-full object-contain" />
-                  : <ModeloImg modelo={m} color={colorSel} className="relative mx-auto aspect-[4/3] w-full object-contain" />}
+                  : <ModeloImg modelo={m} color={color || (m.sinTinte ? undefined : colorSel)} className="relative mx-auto aspect-[4/3] w-full object-contain" />}
               </div>
               {(m.galeria || []).length > 1 && (
                 <div className="mt-3 flex gap-2 overflow-x-auto pb-1" role="list" aria-label="Más fotos" data-galeria-web>

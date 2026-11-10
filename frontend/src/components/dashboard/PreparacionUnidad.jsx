@@ -124,7 +124,7 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-marino dark:text-white">Preparación</h2>
-          <p className="text-[13px] text-slate-500">La moto se vende con o sin techo. Si el cliente elige un techo al separar, aquí se registra su armado hasta que quede instalado.</p>
+          <p className="text-[13px] text-slate-500">La moto se vende con o sin techo. Si se le configura un techo, aquí se registra su armado hasta que quede instalado.</p>
         </div>
         {po && <Pill tono={e.tono}>{e.etapa}</Pill>}
       </div>
@@ -135,7 +135,7 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
           <li className="flex flex-wrap items-center justify-between gap-3 px-4 py-3" data-etapa="Techo">
             <div className="min-w-0">
               <p className="text-[14px] font-semibold text-marino dark:text-white">1. Techo</p>
-              <p className="text-[12.5px] text-slate-500">{t.configuracion ? <>Techo: <b className="text-marino dark:text-white">{t.configuracion}</b>{po.proveedorTecho ? ` con ${po.proveedorTecho}` : ""}. {TEXTO_TECHO[t.estado] || t.estado}.</> : "Sin techo. Si el cliente elige un techo al separar, aquí se registra su armado."}</p>
+              <p className="text-[12.5px] text-slate-500">{t.configuracion ? <>Techo: <b className="text-marino dark:text-white">{t.configuracion}</b>{po.proveedorTecho ? ` con ${po.proveedorTecho}` : ""}. {TEXTO_TECHO[t.estado] || t.estado}.</> : "Sin techo. Si se le configura un techo, aquí se registra su armado."}</p>
             </div>
             {gestiona && t.configuracion && (t.requiereInstalacion
               ? <button className="btn btn-secondary !px-3 !py-1.5 text-[13px]" onClick={() => abrir("Techo", t.estado === "Pendiente" ? "En proceso" : t.estado === "En proceso" ? "Instalado" : "Instalado")}>Registrar avance del techo</button>

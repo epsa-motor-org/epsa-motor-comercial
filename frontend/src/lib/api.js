@@ -255,7 +255,7 @@ export async function pedir(ruta, { metodo = "GET", cuerpo, formulario, headers 
   }
   if (r.status === 404 && !esJson(r)) throw sinRuta(metodo, ruta);
   if (!r.ok || j.ok === false) throw new ApiError(r.status, j.message || "Error", j);
-  return { data: j.data, message: j.message, status: r.status };
+  return { data: j.data, message: j.message, status: r.status, ...(j.warning ? { warning: j.warning } : {}) };
 }
 
 // HU-036 · Almacenamiento central de Supabase (bucket «modelos», diseño de Michelle)
