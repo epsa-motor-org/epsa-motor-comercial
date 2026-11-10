@@ -221,7 +221,7 @@ test('HU-005 apoyo: la separación con una captura inexistente o de otra moto re
     body: JSON.stringify({
       codcli: 1, codusuResponsable: 6, codusuConfirmador: 4, monto: 300, fechaPago: '2026-11-07',
       medioPago: 'Transferencia', referencia: 'OP-1', rutaEvidencia: 'separaciones/99/x.png',
-      observacion: null, ingresoConfirmado: true
+      observacion: null, ingresoConfirmado: true, techo: { decision: 'Por definir' }
     })
   });
   assert.equal(r.status, 422);
@@ -277,13 +277,26 @@ test('HU-005 apoyo: registra el techo que eligió el cliente de una moto separad
   return { data: { coduni: p_coduni, techo: { codtte: '2', nombre: 'Lona', requiereInstalacion: true }, preparacion: {} }, error: null };
 }));
 
+for (const [codigo, estado, mensaje] of [
+  ['PT438', 409, 'La elección de techo no es compatible con el techo instalado en esta unidad'],
+  ['PT439', 422, 'El tipo de techo no existe o está inactivo'],
+  ['PT440', 409, 'La elección de techo ya está guardada y no se puede modificar']
+] as const) {
+  test(`HU-005 apoyo: ${codigo} conserva su significado HTTP en la ruta de techo`, async () => entorno(async base => {
+    const respuesta = await pedir(`${base}/api/unidades/12/separacion/techo`, 'vendedor', json({ codtte: 2 }));
+    assert.equal(respuesta.status, estado);
+    assert.equal(respuesta.body.message, mensaje);
+  }, () => errorRPC(codigo, mensaje)));
+}
+
 test('HU-005 apoyo: un adelanto mayor al precio de lista responde 422 con un mensaje claro', async () => entorno(async base => {
   const r = await pedir(`${base}/api/unidades/12/separaciones`, 'vendedor', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'c9a1e6b2-3f4d-4a5b-8c7d-1e2f3a4b5c6d' },
     body: JSON.stringify({
       codcli: 1, codusuResponsable: 6, monto: 5000000, fechaPago: '2026-11-08', medioPago: 'Efectivo',
-      referencia: null, rutaEvidencia: null, observacion: 'Recibido en tienda', ingresoConfirmado: true
+      referencia: null, rutaEvidencia: null, observacion: 'Recibido en tienda', ingresoConfirmado: true,
+      techo: { decision: 'Por definir' }
     })
   });
   assert.equal(r.status, 422);
@@ -296,7 +309,8 @@ test('HU-005 apoyo: una moto sin precio de lista no se separa y lo explica', asy
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'd2b7f3c4-5e6a-4b7c-9d8e-2f3a4b5c6d7e' },
     body: JSON.stringify({
       codcli: 1, codusuResponsable: 6, monto: 300, fechaPago: '2026-11-08', medioPago: 'Efectivo',
-      referencia: null, rutaEvidencia: null, observacion: 'Recibido en tienda', ingresoConfirmado: true
+      referencia: null, rutaEvidencia: null, observacion: 'Recibido en tienda', ingresoConfirmado: true,
+      techo: { decision: 'Por definir' }
     })
   });
   assert.equal(r.status, 422);
@@ -309,7 +323,8 @@ test('HU-005 apoyo: una fecha de adelanto de hace más de 30 días responde 422'
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'e3c8a4d5-6f7a-4c8d-9e0f-3a4b5c6d7e8f' },
     body: JSON.stringify({
       codcli: 1, codusuResponsable: 6, monto: 300, fechaPago: '2026-01-02', medioPago: 'Efectivo',
-      referencia: null, rutaEvidencia: null, observacion: 'Recibido en tienda', ingresoConfirmado: true
+      referencia: null, rutaEvidencia: null, observacion: 'Recibido en tienda', ingresoConfirmado: true,
+      techo: { decision: 'Por definir' }
     })
   });
   assert.equal(r.status, 422);

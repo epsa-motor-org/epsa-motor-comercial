@@ -4,10 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 
-// HU-005 · 202611080001: motos libres para vender, preparación solo por el techo elegido,
-// techo elegido al separar (también por el vendedor) y comprador con celular y correo.
-// 202611080002: decisión del techo guardada en la separación y tope del adelanto por precio de lista.
-// 202611080003: comprador sin documento (nombres, apellidos y celular).
+// HU-005 · 202611080001–003 son las migrations compartidas con develop.
+// 202611090001 integra la firma de 14 parámetros y separa decisión comercial/física;
+// 202611090002 agrega búsqueda de leads; 202611090003 valida techo instalado.
 
 interface Valor<T> { r: T }
 interface ErrorSQL { code?: string; message?: string }
@@ -43,8 +42,8 @@ test('HU-005 PostgreSQL: venta sin techo, techo elegido al separar y comprador c
   const registrar = (numero: string, telefono: string | null, correo: string | null) => escalar<{ codcli: string; telefono: string }>(
     'SELECT public.hu005_registrar_cliente(1,$1,$2,$3,NULL,$4,$5) r', [numero, 'Rosa', 'Quispe', telefono, correo]);
   const separar = (coduni: string, codcli: string, monto = 300) => escalar<{ estado: string }>(
-    'SELECT public.hu005_crear_separacion($1,$2,3,NULL,$3,CURRENT_DATE,$4,NULL,NULL,$5,true,$6) r',
-    [coduni, codcli, monto, 'Efectivo', 'Recibido en tienda', randomUUID()]);
+    'SELECT public.hu005_crear_separacion($1,$2,3,NULL,$3,CURRENT_DATE,$4,NULL,NULL,$5,true,$6,$7,NULL) r',
+    [coduni, codcli, monto, 'Efectivo', 'Recibido en tienda', randomUUID(), 'Por definir']);
   interface Activa { decisionTecho: { decision: string; nombre: string | null; por: string | null }; techo: { nombre: string; estado: string } }
   const activa = (coduni: string) => escalar<Activa>('SELECT public.hu005_separacion_activa($1) r', [coduni]);
 
@@ -105,7 +104,14 @@ test('HU-005 PostgreSQL: venta sin techo, techo elegido al separar y comprador c
     });
 
     await propietario(async () => {
-      for (const m of ['202611080001_hu005_techo_y_venta', '202611080002_hu005_decision_techo_y_tope', '202611080003_hu005_comprador_sin_documento']) {
+      for (const m of [
+        '202611080001_hu005_techo_y_venta',
+        '202611080002_hu005_decision_techo_y_tope',
+        '202611080003_hu005_comprador_sin_documento',
+        '202611090001_hu005_decision_techo_y_precio_integracion',
+        '202611090002_hu005_buscar_leads',
+        '202611090003_hu005_compatibilidad_techo_instalado'
+      ]) {
         const migracion = leer(`supabase/migrations/${m}.sql`);
         await db.exec(migracion);
         await db.exec(migracion); // se puede volver a ejecutar
@@ -140,32 +146,29 @@ test('HU-005 PostgreSQL: venta sin techo, techo elegido al separar y comprador c
       assert.equal(ok.telefono, '987654321');
     });
 
-    await t.test('El techo solo se elige en una moto separada; el vendedor lo registra', async () => {
+    await t.test('El vendedor registra la decisión comercial sin cambiar techo ni preparación físicos', async () => {
       await login(3);
       const codcli = (await registrar('45879607', '987654322', 'cliente@correo.pe')).codcli;
       await assert.rejects(elegir(moto2!, tipo['Lona']!), error('PT409', /separación activa/));
       assert.equal((await separar(moto2!, codcli)).estado, 'Activa');
       const pendiente = await activa(moto2!);
       assert.deepEqual([pendiente.decisionTecho.decision, pendiente.decisionTecho.nombre], ['Por definir', null]);
+      const prepAntes = await preparacion(moto2!);
       const conLona = await elegir(moto2!, tipo['Lona']!);
       const decidida = await activa(moto2!);
       assert.deepEqual([decidida.decisionTecho.decision, decidida.decisionTecho.nombre, decidida.decisionTecho.por], ['Con techo', 'Lona', 'Cesar QA']);
       assert.equal(conLona.techo.nombre, 'Lona');
-      assert.equal(conLona.preparacion.techo.estado, 'Pendiente');
-      assert.equal(conLona.preparacion.preparacionCompleta, false);
-      assert.deepEqual(conLona.preparacion.condicionesFaltantes, ['Instalación de techo pendiente']);
+      assert.deepEqual(conLona.preparacion, prepAntes);
       const otraVez = await elegir(moto2!, tipo['Lona']!);
       assert.equal(otraVez.preparacion.version, conLona.preparacion.version); // mismo techo: no cambia nada
-      const sinTecho = await elegir(moto2!, tipo['Sin techo']!);
-      assert.equal(sinTecho.preparacion.techo.estado, 'No requiere');
-      assert.equal(sinTecho.preparacion.preparacionCompleta, true);
-      const historial = await propietario(() => escalar<string>(
-        "SELECT u.nomusu || ':' || h.estadonuevo r FROM public.historialpreparacionunidad h JOIN public.usuario u ON u.codusu=h.codusu WHERE h.coduni=$1 AND h.etapaprep='Techo' ORDER BY h.codhprep DESC LIMIT 1", [moto2]));
-      assert.equal(historial, 'Cesar:No requiere'); // el cambio queda auditado a nombre del vendedor
-      await assert.rejects(elegir(moto2!, '999'), error('PT400', /techo/));
+      await assert.rejects(elegir(moto2!, tipo['Sin techo']!), error('PT440'));
+      await assert.rejects(elegir(moto2!, '999'), error('PT439', /techo/));
       const final = await activa(moto2!);
-      assert.deepEqual([final.techo.nombre, final.techo.estado], ['Sin techo', 'No requiere']);
-      assert.equal(final.decisionTecho.decision, 'Sin techo');
+      assert.equal(final.decisionTecho.decision, 'Con techo');
+      assert.deepEqual(await preparacion(moto2!), prepAntes);
+      assert.equal(await propietario(() => escalar<number>(
+        "SELECT count(*)::int r FROM public.historialpreparacionunidad WHERE coduni=$1 AND etapaprep='Techo'", [moto2]
+      )), 0);
     });
 
     await t.test('El vendedor sigue sin poder cambiar techos por HU-004 ni en motos libres', async () => {
@@ -177,14 +180,16 @@ test('HU-005 PostgreSQL: venta sin techo, techo elegido al separar y comprador c
       assert.equal((await preparacion(moto3!)).techo.configuracion, 'Sin techo');
     });
 
-    await t.test('Con techo elegido, queda lista cuando se registra instalado', async () => {
+    await t.test('HU-004/HU-033 configuran e instalan el techo físico sin duplicar la decisión comercial', async () => {
       await login(2);
-      await elegir(moto2!, tipo['Lona']!);
+      const decisionAntes = (await activa(moto2!)).decisionTecho;
+      await escalar('SELECT public.hu004_actualizar_configuracion_techo($1,$2,NULL,NULL) r', [moto2, tipo['Lona']]);
       const antes = await preparacion(moto2!);
       assert.equal(antes.preparacionCompleta, false);
       const despues = await escalar<Preparacion>('SELECT public.hu033_actualizar_preparacion_unidad($1,$2,$3,$4,$5,$6,$7) r',
         [moto2, 'Techo', 'Instalado', Number(antes.version), 'Instalado en tienda', 'Interno', randomUUID()]);
       assert.equal(despues.preparacionCompleta, true);
+      assert.equal((await activa(moto2!)).decisionTecho.decision, decisionAntes.decision);
     });
 
     await t.test('El adelanto no puede superar el precio de lista del modelo (DEF-S3-001)', async () => {
@@ -198,8 +203,8 @@ test('HU-005 PostgreSQL: venta sin techo, techo elegido al separar y comprador c
       await assert.rejects(separar(moto4, codcli, 5000000), error('PT435', /precio de lista/));
       await assert.rejects(separar(moto4, codcli, 18335.01), error('PT435'));
       assert.equal(await propietario(() => escalar<string>('SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [moto4])), 'Disponible');
-      const conFecha = (dias: number) => db.query('SELECT public.hu005_crear_separacion($1,$2,3,NULL,300,CURRENT_DATE - $3::int,$4,NULL,NULL,$5,true,$6) r',
-        [moto4, codcli, dias, 'Efectivo', 'Recibido en tienda', randomUUID()]);
+      const conFecha = (dias: number) => db.query('SELECT public.hu005_crear_separacion($1,$2,3,NULL,300,CURRENT_DATE - $3::int,$4,NULL,NULL,$5,true,$6,$7,NULL) r',
+        [moto4, codcli, dias, 'Efectivo', 'Recibido en tienda', randomUUID(), 'Por definir']);
       await assert.rejects(conFecha(31), error('PT437', /30 días/)); // fecha del adelanto irreal
       assert.equal((await separar(moto4, codcli, 18335)).estado, 'Activa');
       const f = await escalar<{ preciosLista: Record<string, number> }>('SELECT public.hu005_formulario_separacion() r');
@@ -215,19 +220,23 @@ test('HU-005 PostgreSQL: venta sin techo, techo elegido al separar y comprador c
       assert.ok(f.tiposTecho.length >= 2);
     });
 
-    await t.test('Gerencia cambia el techo de una moto separada: la decisión lo sigue; volver a ejecutar no cambia decisiones', async () => {
+    await t.test('HU-004 cambia solo la configuración física y la decisión comercial se mantiene; migrations repetidas se reconcilian al final', async () => {
       await login(1);
       const moto4 = await propietario(() => escalar<string>("SELECT coduni::text r FROM public.unidad WHERE nummotuni='HU005-M-4'"));
       assert.equal((await activa(moto4)).decisionTecho.decision, 'Por definir');
       await escalar('SELECT public.hu004_actualizar_configuracion_techo($1,$2,NULL,NULL) r', [moto4, tipo['Lona']]);
       const cambiada = await activa(moto4);
-      assert.deepEqual([cambiada.decisionTecho.decision, cambiada.decisionTecho.nombre, cambiada.decisionTecho.por], ['Con techo', 'Lona', 'Flavio QA']);
+      assert.deepEqual([cambiada.decisionTecho.decision, cambiada.decisionTecho.nombre], ['Por definir', null]);
       const codcli = (await registrar('45879609', '987654324', 'otra@correo.pe')).codcli;
       assert.equal((await separar(moto3!, codcli)).estado, 'Activa'); // su moto ya tenía «Sin techo» configurado
       assert.equal((await activa(moto3!)).decisionTecho.decision, 'Por definir');
-      await propietario(async () => { await db.exec(leer('supabase/migrations/202611080002_hu005_decision_techo_y_tope.sql')); return undefined; });
+      await propietario(async () => {
+        await db.exec(leer('supabase/migrations/202611090001_hu005_decision_techo_y_precio_integracion.sql'));
+        await db.exec(leer('supabase/migrations/202611090003_hu005_compatibilidad_techo_instalado.sql'));
+        return undefined;
+      });
       assert.equal((await activa(moto3!)).decisionTecho.decision, 'Por definir');
-      assert.equal((await activa(moto4)).decisionTecho.decision, 'Con techo');
+      assert.equal((await activa(moto4)).decisionTecho.decision, 'Por definir');
       await assert.rejects(propietario(() => db.query("UPDATE public.separacion SET dectechosep='Con techo', codttesep=NULL WHERE coduni=$1", [moto3])), error('23514'));
     });
 

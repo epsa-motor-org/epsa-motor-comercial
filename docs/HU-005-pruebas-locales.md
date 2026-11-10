@@ -6,7 +6,7 @@ Importante: lo que pruebes queda guardado de verdad en Supabase (separaciones, c
 
 ## Antes de empezar
 
-1. Los SQL `202611070001_hu005_comprador_evidencia.sql`, `202611080001_hu005_techo_y_venta.sql`, `202611080002_hu005_decision_techo_y_tope.sql` y `202611080003_hu005_comprador_sin_documento.sql` (carpeta `supabase/migrations`) deben estar ejecutados en Supabase, en ese orden (una sola vez basta).
+1. Para una base limpia, aplica las migrations HU-005 en este orden: `202611050001_hu005_separacion_moto.sql`, `202611060001_hu005_confirmador_transferencia.sql`, `202611070001_hu005_comprador_evidencia.sql`, `202611080001_hu005_techo_y_venta.sql`, `202611080002_hu005_decision_techo_y_tope.sql`, `202611080003_hu005_comprador_sin_documento.sql`, `202611090001_hu005_decision_techo_y_precio_integracion.sql`, `202611090002_hu005_buscar_leads.sql` y `202611090003_hu005_compatibilidad_techo_instalado.sql`. No apliques esta secuencia sobre el Supabase remoto actual: las funciones, columnas y triggers ya están presentes allí.
 2. Estar en la rama de las correcciones, con los archivos copiados encima:
 
 ```

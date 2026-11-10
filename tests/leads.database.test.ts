@@ -5,6 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 
 const migracion = readFileSync('supabase/migrations/202610090001_hu014_registro_lead_manual.sql', 'utf8');
 const correccion = readFileSync('supabase/migrations/202610100001_hu014_modelo_publicado.sql', 'utf8');
+const busquedaHu005 = readFileSync('supabase/migrations/202611090002_hu005_buscar_leads.sql', 'utf8');
 const sinHttp407 = readFileSync('supabase/migrations/202610310001_hu015_responsable_sin_http_407.sql', 'utf8');
 test('HU014 PostgreSQL: migración, reglas comerciales, atomicidad y seguridad', async t => {
   const db = new PGlite();
@@ -54,6 +55,7 @@ test('HU014 PostgreSQL: migración, reglas comerciales, atomicidad y seguridad',
       CREATE POLICY anterior_lead ON lead FOR ALL TO PUBLIC USING(true) WITH CHECK(true);`);
     await db.exec(migracion);
     await db.exec(correccion);
+    await db.exec(busquedaHu005);
     await t.test('migración reaplicable preserva históricos, sin NOT NULL global ni teléfono UNIQUE', async () => {
       await db.exec(migracion);
       const aclAnterior = (await db.query<any>(`SELECT proacl::text AS acl FROM pg_proc
@@ -248,6 +250,51 @@ test('HU014 PostgreSQL: migración, reglas comerciales, atomicidad y seguridad',
     await t.test('BIGINT mayor que Number.MAX_SAFE_INTEGER se devuelve intacto como texto', async () => {
       await db.exec(`RESET ROLE; SELECT setval('lead_codlea_seq',9007199254740992,true)`); await login();
       assert.equal((await crear()).codlea, '9007199254740993');
+    });
+    await t.test('HU005 busca leads activos por nombre/celular, limita visibilidad y devuelve solo datos reutilizables', async () => {
+      await db.exec(`RESET ROLE;
+        INSERT INTO lead(nomlea,tellea,orilea,canlea,estlea,codmod,codusu,tipreglea,codcrelea)
+        VALUES
+          ('María Torres QA','987654321','Web','Llamada','Nuevo',1,3,'Manual',1),
+          ('María Rojas QA','999888777','Web','Llamada','Contactado',1,2,'Manual',1),
+          ('María Cerrada QA','987000111','Web','Llamada','Cerrado',1,3,'Manual',1);
+        SELECT setval('lead_codlea_seq', (SELECT max(codlea) FROM lead), true);`);
+
+      await login(1);
+      const porNombre = (await db.query<any>(`SELECT public.hu005_buscar_leads($1) AS data`, ['María'])).rows[0].data;
+      assert.equal(porNombre.length, 2, 'muestra varias coincidencias activas y omite Cerrado');
+      assert.deepEqual(Object.keys(porNombre[0]).sort(), ['celular', 'codlead', 'nombre']);
+      assert.ok(porNombre.every((lead: any) => lead.nombre.startsWith('María')));
+      assert.ok(!JSON.stringify(porNombre).match(/obslea|corusu|uuidusu|codusu|codcli|dni|documento/i));
+
+      const porCelular = (await db.query<any>(`SELECT public.hu005_buscar_leads($1) AS data`, ['987'])).rows[0].data;
+      assert.equal(porCelular.length, 1);
+      assert.equal(porCelular[0].celular, '987654321');
+      assert.deepEqual((await db.query<any>(`SELECT public.hu005_buscar_leads($1) AS data`, ['sin-coincidencias']))
+        .rows[0].data, []);
+
+      await login(3);
+      const propios = (await db.query<any>(`SELECT public.hu005_buscar_leads($1) AS data`, ['María'])).rows[0].data;
+      assert.equal(propios.length, 1);
+      assert.equal(propios[0].celular, '987654321');
+      assert.deepEqual((await db.query<any>(`SELECT public.hu005_buscar_leads($1) AS data`, ['999']))
+        .rows[0].data, [], 'Vendedor no ve leads asignados a otra persona');
+
+      await login(2);
+      assert.equal((await db.query<any>(`SELECT public.hu005_buscar_leads($1) AS data`, ['María']))
+        .rows[0].data.length, 2);
+      await assert.rejects(db.query(`SELECT public.hu005_buscar_leads($1)`, [' ']), (e: any) => e.code === 'PT400');
+      await assert.rejects(db.query(`SELECT public.hu005_buscar_leads($1)`, ['a']), (e: any) => e.code === 'PT400');
+      await assert.rejects(db.query(`SELECT public.hu005_buscar_leads($1)`, ['12']), (e: any) => e.code === 'PT400');
+
+      assert.equal((await db.query<any>(`SELECT has_function_privilege('authenticated',
+        'public.hu005_buscar_leads(text)','EXECUTE') AS permitido`)).rows[0].permitido, true);
+      assert.equal((await db.query<any>(`SELECT has_function_privilege('anon',
+        'public.hu005_buscar_leads(text)','EXECUTE') AS permitido`)).rows[0].permitido, false);
+      await db.exec('RESET ROLE; SET ROLE anon');
+      await fallo(`SELECT public.hu005_buscar_leads('María')`, '42501');
+      await login(1);
+      await fallo('SELECT * FROM public.lead', '42501');
     });
     await t.test('no hay escritura/lectura directa, helper público ni acceso anónimo a RPC', async () => {
       for (const sql of ['SELECT * FROM lead','SELECT * FROM seguimientolead',
