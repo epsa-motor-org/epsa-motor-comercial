@@ -116,6 +116,7 @@ test('HU-005 PostgreSQL: venta sin techo, techo elegido al separar y comprador c
         await db.exec(migracion);
         await db.exec(migracion); // se puede volver a ejecutar
       }
+      await db.exec(leer('supabase/migrations/202611120003_hu005_adelanto_minimo.sql'));
       await db.exec('UPDATE public.modelo SET premod = 18335 WHERE codmod = 1');
       return undefined;
     });
@@ -233,6 +234,7 @@ test('HU-005 PostgreSQL: venta sin techo, techo elegido al separar y comprador c
       await propietario(async () => {
         await db.exec(leer('supabase/migrations/202611090001_hu005_decision_techo_y_precio_integracion.sql'));
         await db.exec(leer('supabase/migrations/202611090003_hu005_compatibilidad_techo_instalado.sql'));
+        await db.exec(leer('supabase/migrations/202611120003_hu005_adelanto_minimo.sql'));
         return undefined;
       });
       assert.equal((await activa(moto3!)).decisionTecho.decision, 'Por definir');

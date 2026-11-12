@@ -1,11 +1,11 @@
 import { ErrorHttp } from './errores';
 import { validarIdCompra } from './compra.validacion';
 import type {
-  CrearVentaInput, DecisionTechoVenta, ModalidadVenta, PagoVentaInput, TechoVentaRequest
+  ConsultaVentasInput, CrearVentaInput, DecisionTechoVenta, ModalidadVenta, PagoVentaInput, TechoVentaRequest
 } from '../types/venta.types';
 
 const CAMPOS_VENTA = [
-  'codcli', 'codusuResponsable', 'codsedAtencion', 'fechaVenta', 'modalidad', 'importe',
+  'codcli', 'codusuResponsable', 'codsedAtencion', 'fechaVenta', 'modalidad', 'adicionalTechoAcordado',
   'codsedEntregaPrevista', 'pagos', 'techo', 'comprobanteExterno', 'observacion'
 ] as const;
 const CAMPOS_PAGO = [
@@ -47,6 +47,13 @@ function validarImporte(valor: unknown, campo: string): number {
   if (typeof valor !== 'number' || !Number.isFinite(valor) || valor <= 0
     || valor > 99999999.99 || Number(valor.toFixed(2)) !== valor)
     throw new ErrorHttp(400, `${campo} debe ser positivo y tener como máximo dos decimales`);
+  return valor;
+}
+
+function validarAdicionalTecho(valor: unknown, campo: string): number {
+  if (typeof valor !== 'number' || !Number.isFinite(valor) || valor < 0
+    || valor > 99999999.99 || Number(valor.toFixed(2)) !== valor)
+    throw new ErrorHttp(400, `${campo} debe ser un número no negativo con hasta dos decimales`);
   return valor;
 }
 
@@ -142,6 +149,13 @@ export function validarCrearVenta(coduni: unknown, body: unknown, clave: unknown
     throw new ErrorHttp(400, 'modalidad debe ser Contado o Crédito');
   const comprobante = validarComprobante(datos.comprobanteExterno);
   const obsven = texto(datos.observacion, 'observacion', 2000);
+  const techo = validarTecho(datos.techo);
+  const adicionalTechoAcordado = datos.adicionalTechoAcordado === undefined || datos.adicionalTechoAcordado === null
+    ? null : validarAdicionalTecho(datos.adicionalTechoAcordado, 'adicionalTechoAcordado');
+  if (techo?.decision === 'Con techo' && adicionalTechoAcordado === null)
+    throw new ErrorHttp(400, 'adicionalTechoAcordado es obligatorio cuando la decisión es Con techo');
+  if (techo && techo.decision !== 'Con techo' && adicionalTechoAcordado !== null && adicionalTechoAcordado !== 0)
+    throw new ErrorHttp(400, 'adicionalTechoAcordado debe ser 0 si la decisión no es Con techo');
   const entrega = datos.codsedEntregaPrevista === undefined || datos.codsedEntregaPrevista === null
     ? null : idPositivo(datos.codsedEntregaPrevista, 'codsedEntregaPrevista');
   return {
@@ -151,10 +165,10 @@ export function validarCrearVenta(coduni: unknown, body: unknown, clave: unknown
     p_codsedatencion: idPositivo(datos.codsedAtencion, 'codsedAtencion'),
     p_fecven: fecha(datos.fechaVenta, 'fechaVenta'),
     p_modcomven: datos.modalidad as ModalidadVenta,
-    p_impven: validarImporte(datos.importe, 'importe'),
+    p_adicionalacordado: adicionalTechoAcordado,
     p_codsedentregaprevista: entrega,
     p_pagos: validarPagos(datos.pagos),
-    p_techo: validarTecho(datos.techo),
+    p_techo: techo,
     p_refcompven: comprobante?.referencia ?? null,
     p_feccompven: comprobante?.fecha ?? null,
     p_obsven: obsven,
@@ -164,16 +178,49 @@ export function validarCrearVenta(coduni: unknown, body: unknown, clave: unknown
 
 export function validarGuardarTechoVenta(codven: unknown, body: unknown) {
   const datos = objeto(body, 'El cuerpo');
-  const extra = Object.keys(datos).find(campo => campo !== 'decision' && campo !== 'codtte');
+  const extra = Object.keys(datos).find(campo => !['decision', 'codtte', 'adicionalAcordado'].includes(campo));
   if (extra) throw new ErrorHttp(400, `Campo no permitido: ${extra}`);
   if (typeof datos.decision !== 'string' || !DECISIONES_TECHO.includes(datos.decision as DecisionTechoVenta))
     throw new ErrorHttp(400, 'decision debe ser Por definir, Sin techo o Con techo');
   let codtte: string | null = null;
-  if (datos.decision === 'Con techo') codtte = idPositivo(datos.codtte, 'codtte');
-  else if (Object.prototype.hasOwnProperty.call(datos, 'codtte'))
-    throw new ErrorHttp(400, 'codtte solo se admite cuando la decisión es Con techo');
+  let adicionalAcordado: number | null = null;
+  if (datos.decision === 'Con techo') {
+    codtte = idPositivo(datos.codtte, 'codtte');
+    adicionalAcordado = validarAdicionalTecho(datos.adicionalAcordado, 'adicionalAcordado');
+  } else if (Object.prototype.hasOwnProperty.call(datos, 'codtte')
+    || Object.prototype.hasOwnProperty.call(datos, 'adicionalAcordado')) {
+    throw new ErrorHttp(400, 'codtte y adicionalAcordado solo se admiten cuando la decisión es Con techo');
+  }
   return { p_codven: validarIdCompra(codven, 'codven'),
-    p_decisiontecho: datos.decision as DecisionTechoVenta, p_codtte: codtte };
+    p_decisiontecho: datos.decision as DecisionTechoVenta, p_codtte: codtte,
+    p_adicionalacordado: adicionalAcordado };
+}
+
+export function validarConsultaVentas(queryDesconocido: unknown): ConsultaVentasInput {
+  if (!queryDesconocido || typeof queryDesconocido !== 'object' || Array.isArray(queryDesconocido))
+    throw new ErrorHttp(400, 'Parámetros de consulta no válidos');
+  const query = queryDesconocido as Record<string, unknown>;
+  const extra = Object.keys(query).find(campo => !['q', 'limite', 'offset'].includes(campo));
+  if (extra) throw new ErrorHttp(400, `Parámetro no permitido: ${extra}`);
+  const valorTexto = (campo: string): string | undefined => {
+    const valor = query[campo];
+    if (valor === undefined) return undefined;
+    if (typeof valor !== 'string') throw new ErrorHttp(400, `${campo} debe enviarse una sola vez como texto`);
+    return valor;
+  };
+  const busqueda = valorTexto('q')?.trim().replace(/\s+/g, ' ') ?? '';
+  if (busqueda.length > 200) throw new ErrorHttp(400, 'q admite hasta 200 caracteres');
+  const entero = (campo: 'limite' | 'offset', defecto: number): number => {
+    const valor = valorTexto(campo);
+    if (valor === undefined) return defecto;
+    if (!/^(0|[1-9]\d*)$/.test(valor)) throw new ErrorHttp(400, `${campo} debe ser un entero no negativo`);
+    const numero = Number(valor);
+    if (!Number.isSafeInteger(numero)) throw new ErrorHttp(400, `${campo} excede el rango permitido`);
+    if (campo === 'limite' && (numero < 1 || numero > 100)) throw new ErrorHttp(400, 'limite debe estar entre 1 y 100');
+    if (campo === 'offset' && numero > 2147483647) throw new ErrorHttp(400, 'offset excede el rango permitido');
+    return numero;
+  };
+  return { p_busqueda: busqueda || null, p_limite: entero('limite', 50), p_offset: entero('offset', 0) };
 }
 
 export function validarGuardarComprobanteVenta(codven: unknown, body: unknown) {

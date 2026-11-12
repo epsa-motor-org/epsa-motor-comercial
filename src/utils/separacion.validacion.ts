@@ -87,6 +87,8 @@ export function validarCrearSeparacion(
     throw new ErrorHttp(400, 'monto debe ser un número positivo');
   if (Number(datos.monto.toFixed(2)) !== datos.monto)
     throw new ErrorHttp(400, 'monto debe tener como máximo dos decimales');
+  if (datos.monto < 100)
+    throw new ErrorHttp(422, 'El adelanto mínimo para separar es S/ 100.00');
   if (typeof datos.medioPago !== 'string' || !datos.medioPago.trim())
     throw new ErrorHttp(400, 'medioPago es obligatorio y debe ser texto');
   if (typeof datos.ingresoConfirmado !== 'boolean')

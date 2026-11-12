@@ -55,6 +55,9 @@ const migracionHu005Leads = readFileSync('supabase/migrations/202611090002_hu005
 const migracionHu005CompatibilidadTecho = readFileSync(
   'supabase/migrations/202611090003_hu005_compatibilidad_techo_instalado.sql', 'utf8'
 );
+const migracionHu005AdelantoMinimo = readFileSync(
+  'supabase/migrations/202611120003_hu005_adelanto_minimo.sql', 'utf8'
+);
 
 test('HU-005: compatibilidad de techo vive en la migration incremental posterior', () => {
   assert.doesNotMatch(migracionHu005Integracion, /PT438|hu005_validar_compatibilidad_techo_instalado/);
@@ -258,6 +261,7 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
     await db.exec(migracionHu005Integracion);
     await db.exec(migracionHu005Leads);
     await db.exec(migracionHu005CompatibilidadTecho);
+    await db.exec(migracionHu005AdelantoMinimo);
 
     const authRows = uuids.map(id => "('" + id + "')").join(',');
     await db.exec("INSERT INTO auth.users(id) VALUES " + authRows + "; "
@@ -721,6 +725,22 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
         'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidadSinPrecio]
       )), 0);
       await administrativo(() => db.query('UPDATE public.modelo SET premod=15000 WHERE codmod=1'));
+    });
+
+    await t.test('HU-005 exige adelanto mínimo de S/ 100 también en PostgreSQL', async () => {
+      const menor = await crearUnidad('MINIMO-99-99');
+      await login(3);
+      const estadoAntes = await operativo(menor);
+      await assert.rejects(crearSeparacion(menor, { monto: 99.99 }), error('PT442'));
+      assert.equal(await administrativo(() => escalar<number>(
+        'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [menor]
+      )), 0);
+      assert.deepEqual(await operativo(menor), estadoAntes);
+
+      const exacto = await crearUnidad('MINIMO-100');
+      assert.equal((await crearSeparacion(exacto, { monto: 100 })).monto, 100);
+      const mayor = await crearUnidad('MINIMO-100-01');
+      assert.equal((await crearSeparacion(mayor, { monto: 100.01 })).monto, 100.01);
     });
 
     await t.test('monto, fecha, medio y referencia inválidos se rechazan antes de escribir', async () => {

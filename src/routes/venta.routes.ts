@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { autenticar, exigirRoles } from '../middleware/autenticacion';
 import type { FabricaCliente } from '../middleware/autenticacion';
 import {
-  crearVenta, guardarComprobanteVenta, guardarTechoVenta, subirEvidenciaVenta
+  consultarVentas, crearVenta, guardarComprobanteVenta, guardarTechoVenta, subirEvidenciaVenta
 } from '../controllers/venta.controller';
 import { recibirEvidenciaVenta } from '../middleware/venta.evidencia';
 import { obtenerVentaDeUnidad } from '../controllers/venta.consulta.controller';
@@ -19,6 +19,7 @@ export function crearRutasVenta(fabrica?: FabricaCliente) {
 
 export function crearRutasTechoVenta(fabrica?: FabricaCliente) {
   const router = Router();
+  router.get('/', autenticar(fabrica), exigirRoles(...ROLES_VENTA), consultarVentas);
   router.put('/:codven/techo', autenticar(fabrica), exigirRoles(...ROLES_VENTA), guardarTechoVenta);
   router.put('/:codven/comprobante', autenticar(fabrica), exigirRoles(...ROLES_VENTA), guardarComprobanteVenta);
   return router;

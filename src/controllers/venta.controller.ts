@@ -4,7 +4,7 @@ import { ErrorHttp } from '../utils/errores';
 import { validarIdCompra } from '../utils/compra.validacion';
 import {
   obtenerClaveIdempotenciaVenta, validarCrearVenta, validarGuardarTechoVenta,
-  validarGuardarComprobanteVenta
+  validarGuardarComprobanteVenta, validarConsultaVentas
 } from '../utils/venta.validacion';
 import { responderErrorVenta } from '../utils/venta.errores';
 import { verificarBytesEvidencia } from '../utils/separacion.apoyo.validacion';
@@ -29,6 +29,14 @@ export const guardarComprobanteVenta: RequestHandler = async (req, res) => {
   try {
     const datos = validarGuardarComprobanteVenta(req.params.codven, req.body);
     const data = await servicio.guardarComprobanteVenta(res.locals.db, datos);
+    res.status(200).json({ ok: true, data });
+  } catch (error) { responderErrorVenta(res, error); }
+};
+
+export const consultarVentas: RequestHandler = async (req, res) => {
+  try {
+    const filtros = validarConsultaVentas(req.query);
+    const data = await servicio.consultarVentas(res.locals.db, filtros);
     res.status(200).json({ ok: true, data });
   } catch (error) { responderErrorVenta(res, error); }
 };
