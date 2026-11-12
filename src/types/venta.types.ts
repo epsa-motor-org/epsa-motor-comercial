@@ -37,7 +37,8 @@ export interface CrearVentaRequest {
   codsedAtencion: number;
   fechaVenta: string;
   modalidad: ModalidadVenta;
-  importe: number;
+  /** El precio base se obtiene en PostgreSQL desde modelo.premod. */
+  adicionalTechoAcordado?: number;
   codsedEntregaPrevista?: number | null;
   pagos?: PagoVentaRequest[];
   techo?: TechoVentaRequest | null;
@@ -63,7 +64,7 @@ export interface CrearVentaInput {
   p_codsedatencion: string;
   p_fecven: string;
   p_modcomven: ModalidadVenta;
-  p_impven: number;
+  p_adicionalacordado: number | null;
   p_codsedentregaprevista: string | null;
   p_pagos: PagoVentaInput[];
   p_techo: TechoVentaRequest | null;
@@ -116,6 +117,9 @@ export interface CrearVentaResultado {
   sedeEntregaPrevista: SedeVenta | null;
   fechaVenta: string;
   modalidad: ModalidadVenta;
+  precioBaseAcordado: number | null;
+  adicionalTechoReferencial: number | null;
+  adicionalTechoAcordado: number | null;
   importe: number;
   totalRecibido: number;
   saldo: number;
@@ -131,12 +135,19 @@ export interface GuardarTechoVentaInput {
   p_codven: string;
   p_decisiontecho: DecisionTechoVenta;
   p_codtte: string | null;
+  p_adicionalacordado: number | null;
 }
 
 export interface GuardarTechoVentaResultado {
   codven: string;
   decision: DecisionTechoVenta;
   codtte: string | null;
+  precioBaseAcordado: number | null;
+  adicionalTechoReferencial: number | null;
+  adicionalTechoAcordado: number | null;
+  importe: number | null;
+  totalRecibido: number | null;
+  saldo: number | null;
   guardado: true;
   reutilizada: boolean;
 }
@@ -164,4 +175,40 @@ export interface EvidenciaVentaSubida {
 
 export interface ErrorVentaBD {
   code?: string;
+}
+
+export interface ConsultaVentasInput {
+  p_busqueda: string | null;
+  p_limite: number;
+  p_offset: number;
+}
+
+export interface VentaListado {
+  codven: string;
+  fecha: string;
+  comprador: { codcli: string; nombre: string; celular: string | null };
+  unidad: { coduni: string; motor: string | null; chasis: string | null; color: string | null };
+  modelo: { codmod: string; nombre: string };
+  responsable: PersonaVenta;
+  modalidad: ModalidadVenta;
+  precioBaseAcordado: number | null;
+  adicionalTechoReferencial: number | null;
+  adicionalTechoAcordado: number | null;
+  total: number | null;
+  adelanto: number;
+  pagos: Array<{ numero: number; monto: number; fecha: string; medioPago: string; referencia: string | null }>;
+  totalRecibido: number;
+  saldo: number | null;
+  techo: { decision: DecisionTechoVenta | null; codtte: string | null; nombre: string | null };
+  sedeAtencion: SedeVenta;
+  sedeEntregaPrevista: SedeVenta | null;
+  estado: string;
+  comprobanteExterno: ComprobanteExternoVentaRequest | null;
+}
+
+export interface ConsultaVentasResultado {
+  items: VentaListado[];
+  total: number;
+  limite: number;
+  offset: number;
 }

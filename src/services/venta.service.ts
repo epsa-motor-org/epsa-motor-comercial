@@ -5,7 +5,8 @@ import { TIPO_EVIDENCIA } from '../utils/separacion.apoyo.validacion';
 import type { FormatoEvidencia } from '../types/separacion.apoyo.types';
 import type {
   CrearVentaInput, CrearVentaResultado, EvidenciaVentaSubida, GuardarTechoVentaInput,
-  GuardarTechoVentaResultado, GuardarComprobanteVentaInput, GuardarComprobanteVentaResultado
+  GuardarTechoVentaResultado, GuardarComprobanteVentaInput, GuardarComprobanteVentaResultado,
+  ConsultaVentasInput, ConsultaVentasResultado
 } from '../types/venta.types';
 
 export const BUCKET_EVIDENCIA_VENTA = 'ventas-evidencia';
@@ -30,6 +31,14 @@ export async function guardarComprobanteVenta(
   const { data, error } = await db.rpc('hu006_guardar_comprobante_venta', { ...datos });
   if (error) throw error;
   return data as GuardarComprobanteVentaResultado;
+}
+
+export async function consultarVentas(
+  db: SupabaseClient, filtros: ConsultaVentasInput
+): Promise<ConsultaVentasResultado> {
+  const { data, error } = await db.rpc('hu006_listar_ventas', filtros);
+  if (error) throw error;
+  return data as ConsultaVentasResultado;
 }
 
 function errorStorage(error: unknown): never {

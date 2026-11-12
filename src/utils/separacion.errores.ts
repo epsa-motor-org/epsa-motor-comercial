@@ -27,7 +27,7 @@ export function responderErrorSeparacion(res: Response, error: unknown) {
     PT439: [422, 'El tipo de techo no existe o está inactivo'],
     PT440: [409, 'La elección de techo ya está guardada y no se puede modificar'],
     PT441: [409, 'La separación ya no está activa'],
-    PT442: [422, 'El adelanto mínimo es S/ 100.00'],
+    PT442: [422, 'El adelanto mínimo para separar es S/ 100.00'],
     '23503': [404, 'No se encontró la unidad, el comprador o el responsable'],
     '23505': [409, 'La unidad ya tiene una separación activa'],
     '23514': [400, 'Los datos no cumplen las restricciones de separación'],

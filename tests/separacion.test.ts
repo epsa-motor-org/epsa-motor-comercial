@@ -194,6 +194,19 @@ test('HU-005 API: el precio de lista limita el adelanto en PostgreSQL y se expon
   assert.ok(!JSON.stringify(respuesta.body).includes('privado'));
 }, () => errorRPC('PT435')));
 
+test('HU-005 API: adelanto mínimo de S/ 100 rechaza 99.99 y acepta 100.00 y 100.01', async () => entorno(async (request, llamadas) => {
+  const menor = await request({ ...requestValido, monto: 99.99 });
+  assert.equal(menor.status, 422);
+  assert.equal(llamadas.length, 0, 'la validación HTTP corta antes de la RPC');
+
+  assert.equal((await request({ ...requestValido, monto: 100 })).status, 201);
+  assert.equal((await request({ ...requestValido, monto: 100.01 })).status, 201);
+  const creaciones = llamadas.filter(llamada => llamada.nombre === 'hu005_crear_separacion');
+  assert.deepEqual(creaciones.map(llamada => (llamada.parametros as Record<string, unknown>).p_monadesep), [100, 100.01]);
+}, (nombre, parametros) => nombre === 'hu005_guardar_techo_separacion'
+  ? { data: { codsep: '123', decision: (parametros as Record<string, string>).p_decisiontecho, codtte: '2', guardado: true, reutilizada: false }, error: null }
+  : { data: { ...separacion, techo: { decision: 'Con techo', codtte: '2', guardado: true } }, error: null }));
+
 test('HU-005 API: acepta las tres decisiones válidas y valida el tipo antes de crear', async () => entorno(async (request, llamadas) => {
   for (const techo of [{ decision: 'Por definir' }, { decision: 'Sin techo' }, { decision: 'Con techo', codtte: 2 }]) {
     const respuesta = await request({ ...requestValido, techo });
