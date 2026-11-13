@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { Link } from "../../components/dashboard/LinkPanel";
 import { useAuth } from "../../context/AuthContext";
 import { inventarioApi, useConsultaCentral } from "../../servicios/central";
-import { etapaOperativa, techoPorArmar } from "../../servicios/inventarioCentral";
+import { etapaComercialDe, etapaOperativa, techoPorArmar } from "../../servicios/inventarioCentral";
 import { Card, PageHeader, Stat, Tabla, Vacio, btnMini } from "../../components/ui";
 import { EstadoConexion, Pestanas, Pill } from "../../components/dashboard/Sprint2";
 import { AvisoConexion, sinApi, BarraActualizacion, ColorUnidad, PillComercial, TextoUbicacion } from "../../components/dashboard/Central";
@@ -14,10 +14,11 @@ import { ModalAvancePreparacion, accionesPreparacion } from "../../components/da
 
 const TEXTO_TECHO = { Pendiente: "Por armar", "En proceso": "En armado", Instalado: "Instalado", "No requiere": "No requiere" };
 const normal = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+// CP-006-06: una moto cuyo comprador eligió un techo aún sin configurar, o lo tiene por definir, no está lista
 const VISTAS = {
-  porArmar: (po) => techoPorArmar(po),
+  porArmar: (po, u) => techoPorArmar(po) || Boolean(etapaComercialDe(po, u?.techoComercial)),
   enArmado: (po) => techoPorArmar(po) && po.techo?.estado === "En proceso",
-  listas: (po) => !techoPorArmar(po),
+  listas: (po, u) => !techoPorArmar(po) && !etapaComercialDe(po, u?.techoComercial),
   todas: () => true,
 };
 const SUBTITULO = "La moto se vende con o sin techo. Cuando se le configura un techo, aquí se registra su armado hasta que quede instalado.";
@@ -32,8 +33,8 @@ export default function PreparacionCentral() {
   const consulta = useConsultaCentral(() => inventarioApi(), [], { clave: "inventario::" });
   const todas = useMemo(() => (consulta.data?.unidades || []).filter((u) => u.preparacion?.operativa && (conVendidas || u.comercial !== "Vendida")), [consulta.data, conVendidas]);
   const sinDatos = consulta.data && (consulta.data.unidades || []).length > 0 && !(consulta.data.unidades || []).some((u) => u.preparacion?.operativa);
-  const lista = todas.filter((u) => VISTAS[vista](u.preparacion.operativa)).filter((u) => !q.trim() || normal(`${u.nummotuni} ${u.chauni} ${u.nommod} ${u.coduni} ${u.coluni} ${u.ubicacion?.nomubi || ""}`).includes(normal(q.trim())));
-  const n = (k) => todas.filter((u) => VISTAS[k](u.preparacion.operativa)).length;
+  const lista = todas.filter((u) => VISTAS[vista](u.preparacion.operativa, u)).filter((u) => !q.trim() || normal(`${u.nummotuni} ${u.chauni} ${u.nommod} ${u.coduni} ${u.coluni} ${u.ubicacion?.nomubi || ""}`).includes(normal(q.trim())));
+  const n = (k) => todas.filter((u) => VISTAS[k](u.preparacion.operativa, u)).length;
 
   if (sinApi(consulta)) return (
     <div>
@@ -52,7 +53,7 @@ export default function PreparacionCentral() {
       {sinDatos && <Vacio titulo="La preparación todavía no está habilitada" texto="Falta ejecutar en Supabase el SQL de mejoras finales (docs/supabase-sprint2-final.sql)." />}
 
       <div className="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-3">
-        <Stat etiqueta="Techo por armar" valor={n("porArmar")} tono={n("porArmar") ? "ambar" : "marino"} nota="Techo configurado, falta instalarlo" />
+        <Stat etiqueta="Techo por armar" valor={n("porArmar")} tono={n("porArmar") ? "ambar" : "marino"} nota="Por instalar, o el techo del comprador sin programar o por definir" />
         <Stat etiqueta="Techo en armado" valor={n("enArmado")} nota="Ya se está instalando" />
         <Stat etiqueta="Listas para entrega" valor={n("listas")} tono="verde" nota="Sin techo o con su techo instalado" />
       </div>
@@ -72,13 +73,13 @@ export default function PreparacionCentral() {
       {consulta.data && !sinDatos && (lista.length === 0 ? <Vacio titulo={vista === "porArmar" && !q ? "No hay techos por armar" : "No hay motos en esta etapa"} texto={q ? "Ninguna coincide con la búsqueda." : vista === "porArmar" ? "Cuando un cliente elija un techo al separar su moto, aparecerá aquí." : "Cambia de pestaña para ver las demás etapas."} /> : (
         <Tabla columnas={["Moto", "Modelo", "Ubicación", "Techo", "Preparación", "Situación", "Acciones"]}>
           {lista.map((u) => {
-            const po = u.preparacion.operativa; const t = po.techo || {}; const e = etapaOperativa(po);
+            const po = u.preparacion.operativa; const t = po.techo || {}; const e = etapaComercialDe(po, u.techoComercial) || etapaOperativa(po);
             return (
               <tr key={u.coduni} className="align-top" data-prep={u.coduni}>
                 <td className="px-4 py-3"><Link className="font-semibold text-marino hover:underline dark:text-white" to={`/admin/inventario/${u.coduni}`}>{u.nummotuni || `N° ${u.coduni}`}</Link>{u.chauni && <span className="block text-[12px] text-slate-400">chasis {u.chauni}</span>}</td>
                 <td className="px-4 py-3">{u.nommod}<span className="block text-[12px] text-slate-400"><ColorUnidad color={u.coluni} /></span></td>
                 <td className="px-4 py-3"><TextoUbicacion unidad={u} /></td>
-                <td className="px-4 py-3">{t.configuracion ? <><span className="block">{t.configuracion}{po.proveedorTecho ? <span className="text-slate-400">, {po.proveedorTecho}</span> : null}</span><span className={`mt-0.5 block w-fit rounded-full px-2 py-0.5 text-[11px] font-semibold ${t.estado === "Instalado" || t.estado === "No requiere" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>{TEXTO_TECHO[t.estado] || t.estado}</span></> : <span className="text-slate-500">Sin techo</span>}</td>
+                <td className="px-4 py-3">{t.configuracion ? <><span className="block">{t.configuracion}{po.proveedorTecho ? <span className="text-slate-400">, {po.proveedorTecho}</span> : null}</span><span className={`mt-0.5 block w-fit rounded-full px-2 py-0.5 text-[11px] font-semibold ${t.estado === "Instalado" || t.estado === "No requiere" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>{TEXTO_TECHO[t.estado] || t.estado}</span></> : <span className="text-slate-500">Sin techo configurado</span>}{u.techoComercial && <span className="mt-0.5 block text-[12px] text-slate-500" data-techo-comprador={u.techoComercial.decision}>Comprador: {u.techoComercial.decision === "Con techo" ? u.techoComercial.nombre || "con techo" : u.techoComercial.decision.toLowerCase()}</span>}</td>
                 <td className="px-4 py-3"><Pill tono={e.tono}>{e.etapa}</Pill></td>
                 <td className="px-4 py-3"><PillComercial comercial={u.comercial} /></td>
                 <td className="px-4 py-3"><div className="flex flex-wrap gap-1.5">

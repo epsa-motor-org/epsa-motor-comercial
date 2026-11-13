@@ -10,7 +10,8 @@ import IlustracionTecho from "../components/IlustracionTecho";
 import WhatsAppButton from "../components/WhatsAppButton.HU-013";
 import { IlustracionDni, IlustracionRecibo, IlustracionCotizacion } from "../components/IlustracionesVisita";
 import { IconPhone, IconMail, IconPin, IconFlecha, IconCheck, IconPiston, IconRayo, IconMotor, IconMedidor } from "../components/Icons";
-import { OPCIONES_TECHO, SIN_TECHO, enlaceGoogleMaps, enlaceMapaEmbebido, formatoSoles } from "../data/mockData";
+import { enlaceGoogleMaps, enlaceMapaEmbebido, formatoSoles } from "../data/mockData";
+import { useTechos } from "../servicios/techos";
 import { formatoTelefono, limpiarTelefono } from "../lib/validar";
 import { WHATSAPP_NUMERO } from "../lib/config";
 
@@ -32,13 +33,12 @@ const PREGUNTAS = [
   ["¿Me ayudan con la placa y la tarjeta de propiedad?", "Sí. Gestionamos ante Sunarp la placa y la tarjeta de propiedad con la compra de tu Torito nuevo."],
 ];
 
-// Techos que se eligen al cotizar
-const TECHOS = [SIN_TECHO, ...OPCIONES_TECHO];
+// Techos que se eligen al cotizar: el catálogo único (servicios/techos.js)
 const DESCRIPCION_TECHO = {
   ninguno: "Solo la moto, para que armes el techo a tu manera.",
   lona: "Cubierta de lona sobre estructura metálica.",
-  basico: "Techo de fibra de línea clásica.",
-  superlujo: "Techo de fibra con acabados de lujo.",
+  clasico: "Techo de fibra de línea clásica.",
+  equipado: "Techo de fibra clásica con su equipamiento completo.",
   deportivo: "Techo de fibra de línea deportiva.",
 };
 
@@ -92,6 +92,7 @@ const telefonoVisible = (t) => (limpiarTelefono(t).startsWith("9") ? `+51 ${form
 export default function Sedes() {
   const { sedes, publicos } = useApp();
   const cotizar = useCotizar();
+  const TECHOS = useTechos();
   const motos = motosConFotoDistinta(publicos, 3);
 
   return (

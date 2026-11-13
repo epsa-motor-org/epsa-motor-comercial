@@ -204,14 +204,16 @@ export const FILTROS_CATALOGO = {
   uso: ["Pasajeros", "Carga"],
 };
 
-// Techos y financiamiento
+// Techos: un solo catálogo para la web, el panel, la separación, la venta y la preparación (tipos de techo de la base
+// con su adicional referencial, regla del PO del 11 de noviembre). La web lo lee de GET /api/techos y el panel del
+// formulario de separación; esta copia, con los mismos nombres y montos, solo se usa si la API no responde.
 export const OPCIONES_TECHO = [
   { id: "lona", nombre: "Lona", precio: 200 },
-  { id: "basico", nombre: "Básico", precio: 2000 },
-  { id: "superlujo", nombre: "Superlujo", precio: 3000 },
-  { id: "deportivo", nombre: "Superlujo Deportivo", precio: 4000 },
+  { id: "clasico", nombre: "Techo clásico de fibra", precio: 1700 },
+  { id: "equipado", nombre: "Fibra clásica equipada", precio: 3200 },
+  { id: "deportivo", nombre: "Techo de fibra deportiva", precio: 4000 },
 ];
-export const SIN_TECHO = { id: "ninguno", nombre: "Sin techo (solo la moto)", precio: 0 };
+export const SIN_TECHO = { id: "ninguno", nombre: "Sin techo", precio: 0 };
 export const CUOTAS_INICIAL = [20, 30, 40, 50];
 export const PLAZOS = [6, 12, 18, 24, 30, 36];
 
@@ -243,14 +245,16 @@ export function enlaceMapaEmbebido(direccion) {
 }
 
 // Techo y preparación de unidades
-export const TIPOS_TECHO = ["Sin techo", "Lona", "Techo clásico de fibra", "Techo de fibra deportiva"];
+export const TIPOS_TECHO = ["Sin techo", "Lona", "Techo clásico de fibra", "Fibra clásica equipada", "Techo de fibra deportiva"];
 export const TECHO_REQUIERE_PROVEEDOR = (t) => t === "Techo de fibra deportiva";
 export const PROVEEDORES_TECHO = ["FIVESA", "JAVICAR", "FIBRAT"];
 export const MAX_DETALLE_TECHO = 250;
 export function normalizarTecho(techo, proveedor) {
   const t = String(techo || "Sin techo");
   if (TIPOS_TECHO.includes(t)) return t;
-  if (/fibra/i.test(t)) return proveedor ? "Techo de fibra deportiva" : "Techo clásico de fibra";
+  if (/equipad/i.test(t)) return "Fibra clásica equipada";
+  if (/deportiv/i.test(t)) return "Techo de fibra deportiva";
+  if (/fibra|cl[aá]sic|b[aá]sic/i.test(t)) return proveedor ? "Techo de fibra deportiva" : "Techo clásico de fibra";
   return /lona/i.test(t) ? "Lona" : "Sin techo";
 }
 export const ESTADOS_PREPARACION = ["Sin preparar", "Pendiente de techo", "En preparación", "Lista para entrega"];
@@ -275,11 +279,11 @@ const hoy = new Date();
 const dia = (n) => new Date(hoy.getTime() - n * 86400000).toLocaleDateString("en-CA");
 
 export const LEADS = [
-  { id: 1, fecha: dia(0), contacto: "Carlos Ramírez", telefono: "987654321", canal: "Formulario web", modelo: "torito-4v-gsl", color: "Rojo", sede: "Comas", responsable: "Didier Leguía Sandoval", estado: "Nuevo", nota: "Techo: Básico · Pago: Financiamiento" },
+  { id: 1, fecha: dia(0), contacto: "Carlos Ramírez", telefono: "987654321", canal: "Formulario web", modelo: "torito-4v-gsl", color: "Rojo", sede: "Comas", responsable: "Didier Leguía Sandoval", estado: "Nuevo", nota: "Techo: Techo clásico de fibra · Pago: Financiamiento" },
   { id: 2, fecha: dia(1), contacto: "María Torres", telefono: "955112233", canal: "WhatsApp", modelo: "torito-crom-plus-gnv", color: "Rojo", sede: "Ventanilla", responsable: "Michelle Fuentes Villaorduña", estado: "En seguimiento", nota: "Pidió crédito a 24 meses" },
   { id: 3, fecha: dia(3), contacto: "José Quispe", telefono: "944778899", canal: "Visita a sede", modelo: "torito-2t-ug-glp", color: "Verde", sede: "Comas", responsable: "Didier Leguía Sandoval", estado: "Cotizado", nota: "Cotización enviada" },
   { id: 4, fecha: dia(5), contacto: "Rosa Huamán", telefono: "933221100", canal: "Facebook", modelo: "torito-2t-ug-gsl", color: "Azul", sede: "Puente Piedra", responsable: "Sin asignar", estado: "Nuevo", nota: "" },
-  { id: 5, fecha: dia(8), contacto: "Pedro Salas", telefono: "922334455", canal: "Referido", modelo: "torito-250-4v-glp", color: "Rojo", sede: "Comas", responsable: "Didier Leguía Sandoval", estado: "Cerrado ganado", nota: "Compró con techo Superlujo" },
+  { id: 5, fecha: dia(8), contacto: "Pedro Salas", telefono: "922334455", canal: "Referido", modelo: "torito-250-4v-glp", color: "Rojo", sede: "Comas", responsable: "Didier Leguía Sandoval", estado: "Cerrado ganado", nota: "Compró con techo Fibra clásica equipada" },
 ];
 
 export const SEGUIMIENTOS = [
@@ -290,11 +294,11 @@ export const SEGUIMIENTOS = [
 ];
 
 export const VENTAS = [
-  { id: 1, fecha: dia(0), cliente: "Carlos Ramírez", celular: "987654321", documento: "", modelo: "torito-4v-gsl", color: "Rojo", techo: "Básico", techoPrecio: 2000, pago: "Financiamiento", etapa: "Solicitud web", vendedor: "Sin asignar", sede: "Comas", adelanto: 0, total: 19899, unidad: null, canal: "Formulario web", origen: "Web de EPSA", leadId: 1 },
+  { id: 1, fecha: dia(0), cliente: "Carlos Ramírez", celular: "987654321", documento: "", modelo: "torito-4v-gsl", color: "Rojo", techo: "Techo clásico de fibra", techoPrecio: 1700, pago: "Financiamiento", etapa: "Solicitud web", vendedor: "Sin asignar", sede: "Comas", adelanto: 0, total: 19599, unidad: null, canal: "Formulario web", origen: "Web de EPSA", leadId: 1 },
   { id: 2, fecha: dia(2), cliente: "José Quispe", celular: "944778899", documento: "DNI 45879632", modelo: "torito-2t-ug-glp", color: "Verde", techo: "", techoPrecio: 0, pago: "Pago al contado", etapa: "Cotización", vendedor: "Didier Leguía Sandoval", sede: "Comas", adelanto: 0, total: 14699, unidad: null, canal: "Visita a sede", origen: "Pasó por la sede" },
   { id: 3, fecha: dia(6), cliente: "Mario Díaz", celular: "911137531", documento: "DNI 40007919", modelo: "torito-crom-plus-gnv", color: "Rojo", techo: "Lona", techoPrecio: 200, pago: "Financiamiento", etapa: "Pedido registrado", vendedor: "Michelle Fuentes Villaorduña", sede: "Ventanilla", adelanto: 5200, total: 17399, unidad: "MC-003", medioPago: "Transferencia", operacion: "OP-558201", canal: "WhatsApp", origen: "Referido" },
-  { id: 4, fecha: dia(14), cliente: "Pedro Salas", celular: "922334455", documento: "DNI 41236587", modelo: "torito-250-4v-glp", color: "Rojo", techo: "Superlujo", techoPrecio: 3000, pago: "Pago al contado", etapa: "Entregado", vendedor: "Didier Leguía Sandoval", sede: "Comas", adelanto: 21299, total: 21299, unidad: "MC-004", medioPago: "Efectivo", canal: "Referido", origen: "Referido",
-    comprobante: { tipo: "Boleta de venta", serie: "B001", numero: 1, fecha: dia(14), cliente: "Pedro Salas", tipoDoc: "DNI", doc: "41236587", direccion: "", descripcion: "Motocar Torito 250 4V GLP color Rojo, motor BJM-10209, chasis BJC-88215 · techo Superlujo", medio: "Efectivo", total: 21299, gravada: 21299 / 1.18, igv: 21299 - 21299 / 1.18, emitidoPor: "Harold Salazar Masgo", estado: "Emitido" } },
+  { id: 4, fecha: dia(14), cliente: "Pedro Salas", celular: "922334455", documento: "DNI 41236587", modelo: "torito-250-4v-glp", color: "Rojo", techo: "Fibra clásica equipada", techoPrecio: 3200, pago: "Pago al contado", etapa: "Entregado", vendedor: "Didier Leguía Sandoval", sede: "Comas", adelanto: 21499, total: 21499, unidad: "MC-004", medioPago: "Efectivo", canal: "Referido", origen: "Referido",
+    comprobante: { tipo: "Boleta de venta", serie: "B001", numero: 1, fecha: dia(14), cliente: "Pedro Salas", tipoDoc: "DNI", doc: "41236587", direccion: "", descripcion: "Motocar Torito 250 4V GLP color Rojo, motor BJM-10209, chasis BJC-88215 · techo Fibra clásica equipada", medio: "Efectivo", total: 21499, gravada: 21499 / 1.18, igv: 21499 - 21499 / 1.18, emitidoPor: "Harold Salazar Masgo", estado: "Emitido" } },
   { id: 5, fecha: dia(20), cliente: "Rosa Vega", celular: "911550124", documento: "DNI 40031676", modelo: "torito-2t-ug-gsl", color: "Azul", techo: "", techoPrecio: 0, pago: "Financiamiento", etapa: "Entregado", vendedor: "Michelle Fuentes Villaorduña", sede: "Ventanilla", adelanto: 4410, total: 12699, unidad: "MC-005", medioPago: "Yape / Plin", operacion: "YP-99812", canal: "Facebook", origen: "Redes sociales" },
 ];
 

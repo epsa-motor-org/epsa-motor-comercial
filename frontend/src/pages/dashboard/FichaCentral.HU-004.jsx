@@ -3,6 +3,8 @@
 // movimientos y avances; el vendedor solo consulta. La ficha se actualiza sola.
 // HU-005: los tres roles comerciales separan la moto desde aquí y ven su separación activa.
 // HU-006: también registran su venta (directa o desde la separación) y ven la venta registrada.
+// HU-021: el gerente, la administradora o el vendedor responsable vigente cancelan la separación o la venta (con motivo y
+// lo que pasó con el dinero); la ficha muestra después las cancelaciones de la moto.
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Link } from "../../components/dashboard/LinkPanel";
@@ -20,10 +22,13 @@ import SepararMotoCentral, { SeparacionActivaCard } from "../../components/dashb
 import { sePuedeSeparar } from "../../servicios/separacionCentral";
 import VenderMotoCentral, { VentaCard } from "../../components/dashboard/VenderCentral";
 import { sePuedeVender } from "../../servicios/ventaCentral";
+import { CancelacionesUnidadCard, CancelarOperacionModal } from "../../components/dashboard/CancelarCentral";
+import { SEPARACION, VENTA } from "../../servicios/cancelacionCentral";
 const DESCRIPCION_TECHO = {
   "Sin techo": "La unidad no lleva techo instalado.",
   Lona: "Techo de lona. No necesita proveedor externo.",
   "Techo clásico de fibra": "Fibra fabricada por EPSA Motor. No necesita proveedor externo.",
+  "Fibra clásica equipada": "Fibra clásica con su equipamiento completo. No necesita proveedor externo.",
   "Techo de fibra deportiva": "Fibra deportiva hecha por FIVESA, JAVICAR o FIBRAT.",
 };
 const limpiar = (t) => String(t || "").trim().replace(/\s+/g, " ");
@@ -39,6 +44,8 @@ function FichaCentral({ id }) {
   const separa = puede("separaciones.registrar");
   const [separando, setSeparando] = useState(false);
   const [vendiendo, setVendiendo] = useState(false);
+  const [cancelando, setCancelando] = useState(null);
+  const [versionCancelaciones, setVersionCancelaciones] = useState(0);
   const { state } = useLocation();
   const valido = /^[1-9]\d{0,18}$/.test(String(id));
   const consulta = useConsultaCentral(() => unidadCentralApi(id), [id], { activo: valido, clave: `unidad:${id}` });
@@ -100,8 +107,9 @@ function FichaCentral({ id }) {
           </div>
         )}</Card>
       </div>
-      {u.comercial === "Separada" && <div className="mb-6"><SeparacionActivaCard unidad={u} puedeTecho={separa} onCambio={recargar} onVender={separa && sePuedeVender(u) ? () => setVendiendo(true) : undefined} /></div>}
-      {u.comercial === "Vendida" && <div className="mb-6"><VentaCard unidad={u} puedeEditar={separa} onCambio={recargar} /></div>}
+      {u.comercial === "Separada" && <div className="mb-6"><SeparacionActivaCard unidad={u} puedeTecho={separa} onCambio={recargar} onVender={separa && sePuedeVender(u) ? () => setVendiendo(true) : undefined} onCancelar={(s) => setCancelando({ tipo: SEPARACION, operacion: s })} /></div>}
+      {u.comercial === "Vendida" && <div className="mb-6"><VentaCard unidad={u} puedeEditar={separa} onCambio={recargar} onCancelar={(v) => setCancelando({ tipo: VENTA, operacion: v })} /></div>}
+      <div className="mb-6 empty:hidden"><CancelacionesUnidadCard unidad={u} version={versionCancelaciones} /></div>
       <div className="mb-6"><PreparacionUnidadCard unidad={u} gestiona={gestiona} onCambio={recargar} /></div>
       <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
         <MovimientosUnidad unidad={u} gestiona={gestiona} ubicaciones={ubicaciones} onCambio={recargar} />
@@ -109,6 +117,7 @@ function FichaCentral({ id }) {
       </div>
       {separando && <SepararMotoCentral unidad={u} onClose={() => setSeparando(false)} onHecho={recargar} onConflicto={recargar} />}
       {vendiendo && <VenderMotoCentral unidad={u} onClose={() => setVendiendo(false)} onHecho={recargar} onConflicto={recargar} />}
+      {cancelando && <CancelarOperacionModal tipo={cancelando.tipo} operacion={cancelando.operacion} unidad={u} onClose={() => setCancelando(null)} onHecho={() => { recargar(); setVersionCancelaciones((n) => n + 1); }} onCambio={recargar} />}
     </div>
   );
 }
@@ -172,6 +181,12 @@ function ConfigTecho({ unidad, gestiona, onGuardado }) {
   const tipos = cat ? [...cat.tipos].sort((a, b) => orden(a.nomtte) - orden(b.nomtte)) : [];
   const tipo = tipos.find((x) => x.nomtte === f.techo);
   const requiere = Boolean(tipo?.reqprotte);
+  // HU-006: con el techo ya decidido por el comprador (separación activa o venta), la configuración solo puede ser
+  // ese techo («Con techo X») o ninguno («Sin techo»); la base lo vuelve a revisar (PT423). Vendida con el techo por
+  // definir: primero se registra la decisión del comprador en la venta.
+  const comp = unidad.techoComercial;
+  const vendidaPorDefinir = unidad.comercial === "Vendida" && (!comp || comp.decision === "Por definir");
+  const permitido = (x) => !comp || comp.decision === "Por definir" ? !vendidaPorDefinir : comp.decision === "Con techo" ? String(x.codtte) === String(comp.codtte) : x.nomtte === "Sin techo";
   const cambio = inicial && (f.techo !== inicial.techo || (requiere && f.proveedor !== inicial.proveedor) || limpiar(requiere ? f.detalle : "") !== limpiar(inicial.detalle));
 
   async function guardar(e) {
@@ -184,7 +199,8 @@ function ConfigTecho({ unidad, gestiona, onGuardado }) {
     if (requiere && !f.proveedor) x.proveedor = "Elige el proveedor que hará la fibra deportiva.";
     else if (requiere && !prov) x.proveedor = "Ese proveedor no está habilitado para techos.";
     if ([...detalle].length > MAX_DETALLE_TECHO) x.detalle = `Máximo ${MAX_DETALLE_TECHO} caracteres.`;
-    if (unidad.comercial === "Vendida") x.general = "La unidad ya se vendió: su configuración no se modifica.";
+    if (vendidaPorDefinir) x.general = "La moto se vendió con el techo por definir: primero registra en la venta el techo que eligió el comprador.";
+    else if (tipo && !permitido(tipo)) x.techo = comp?.decision === "Con techo" ? `El comprador eligió «${comp.nombre}»: configura ese techo.` : "El comprador eligió la moto sin techo: no se le configura un techo.";
     setErr(x); if (Object.keys(x).length) return;
     const avance = t.requiereInstalacion && t.avance !== "Pendiente" ? " El avance de instalación registrado se reinicia a «Pendiente»." : "";
     if (!(await confirmar({ titulo: "¿Guardar la configuración?", texto: `${f.techo}${requiere ? ` con ${f.proveedor}` : ""}${detalle ? `, ${detalle}` : ""}.${avance}`, boton: "Guardar configuración" }))) return;
@@ -204,6 +220,8 @@ function ConfigTecho({ unidad, gestiona, onGuardado }) {
     <Card>
       <h2 className="text-lg font-bold text-marino dark:text-white">Configuración de techo</h2>
       <p className="text-[13px] text-slate-500">Tipo de techo y proveedor de esta unidad. Su instalación se registra en Preparación.</p>
+      {comp && comp.decision !== "Por definir" && <div className="mt-3"><Aviso tipo="info"><span data-techo-elegido-comprador={comp.decision}>{comp.decision === "Con techo" ? `El comprador eligió «${comp.nombre}» en su ${comp.origen === "Venta" ? "venta" : "separación"}. Solo se puede configurar ese techo; al guardarlo queda por instalar en Preparación.` : `El comprador eligió la moto sin techo en su ${comp.origen === "Venta" ? "venta" : "separación"}: no se le configura un techo.`}</span></Aviso></div>}
+      {vendidaPorDefinir && <div className="mt-3"><Aviso tipo="aviso">La moto se vendió con el techo por definir. Cuando el comprador decida, regístralo en «Venta registrada» y luego configura aquí ese techo.</Aviso></div>}
       {!cat && !errCarga && <p className="mt-4 text-[13px] text-slate-500">Cargando la configuración del techo…</p>}
       {errCarga && <div className="mt-4"><Aviso tipo="error">No se pudo cargar el techo: {errCarga}</Aviso></div>}
       {cat && (
@@ -212,8 +230,8 @@ function ConfigTecho({ unidad, gestiona, onGuardado }) {
             <legend className="field-label">Tipo de techo</legend>
             <div className="grid gap-2 sm:grid-cols-2">
               {tipos.map((x) => (
-                <label key={x.codtte} className={`flex cursor-pointer items-start gap-3 rounded-xl border-2 p-3 transition ${f.techo === x.nomtte ? "border-marino-700 bg-marino-50 text-marino dark:border-white/50 dark:bg-white/10 dark:text-white" : "border-slate-200 text-slate-500 hover:border-slate-300 dark:border-white/10"}`}>
-                  <input type="radio" name="techo-central" className="sr-only" checked={f.techo === x.nomtte} onChange={() => setF({ ...f, techo: x.nomtte, proveedor: x.reqprotte ? f.proveedor : "", detalle: x.reqprotte ? f.detalle : "" })} />
+                <label key={x.codtte} data-tipo-config={x.nomtte} data-bloqueado={permitido(x) ? undefined : "si"} className={`flex items-start gap-3 rounded-xl border-2 p-3 transition ${permitido(x) ? "cursor-pointer" : "cursor-not-allowed opacity-50"} ${f.techo === x.nomtte ? "border-marino-700 bg-marino-50 text-marino dark:border-white/50 dark:bg-white/10 dark:text-white" : "border-slate-200 text-slate-500 hover:border-slate-300 dark:border-white/10"}`}>
+                  <input type="radio" name="techo-central" className="sr-only" checked={f.techo === x.nomtte} disabled={!permitido(x)} onChange={() => setF({ ...f, techo: x.nomtte, proveedor: x.reqprotte ? f.proveedor : "", detalle: x.reqprotte ? f.detalle : "" })} />
                   <span className="min-w-0"><span className="block text-[14px] font-semibold text-marino dark:text-white">{x.nomtte}</span><span className="block text-[12px] leading-snug text-slate-500">{DESCRIPCION_TECHO[x.nomtte] || "Tipo de techo registrado en el sistema."}</span></span>
                 </label>
               ))}

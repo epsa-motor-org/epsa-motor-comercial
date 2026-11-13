@@ -6,7 +6,7 @@ import { useState } from "react";
 import { actualizarPreparacionApi, preparacionUnidadApi } from "../../lib/api";
 import { mensajeError } from "../../lib/errores";
 import { useConsultaCentral, useIntento } from "../../servicios/central";
-import { etapaOperativa, techoPorArmar } from "../../servicios/inventarioCentral";
+import { etapaComercialDe, etapaOperativa, techoPorArmar } from "../../servicios/inventarioCentral";
 import { Aviso, Campo, Card, Modal, useToast } from "../ui";
 import { Pill } from "./Sprint2";
 import { ColorUnidad, fechaCompleta, nombreUnidad } from "./Central";
@@ -116,7 +116,9 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
   if (consulta.error?.detalle?.faltaSql) return null;
   const po = consulta.data?.actual ? { ...consulta.data.actual, proveedorTecho: unidad.preparacion?.techo?.proveedor || "", detalleTecho: unidad.preparacion?.techo?.detalle || "" } : null;
   const historial = [...(consulta.data?.historial || [])].reverse();
-  const e = etapaOperativa(po);
+  // CP-006-06: con el techo del comprador por definir o sin configurar, la moto no figura lista para entrega
+  const eComercial = po ? etapaComercialDe(po, unidad.techoComercial) : null;
+  const e = eComercial || etapaOperativa(po);
   const t = po?.techo || {};
   const abrir = (etapa, estado) => setModal({ unidad, po, etapa, estado });
   return (
@@ -143,7 +145,7 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
           </li>
           <li className="px-4 py-3" data-etapa="Entrega">
             <p className="text-[14px] font-semibold text-marino dark:text-white">2. Condición de entrega</p>
-            <p className="text-[12.5px] text-slate-500">{techoPorArmar(po) ? `Falta armar el techo (${t.configuracion}).` : "Lista para entrega. No equivale a entregada al comprador."}</p>
+            <p className="text-[12.5px] text-slate-500" data-condicion-entrega={e.etapa}>{eComercial ? eComercial.nota : techoPorArmar(po) ? `Falta armar el techo (${t.configuracion}).` : "Lista para entrega. No equivale a entregada al comprador."}</p>
           </li>
         </ol>
         {po.ultimaActualizacion && <p className="mt-2 text-[12px] text-slate-400">Última actualización: {fechaCompleta(po.ultimaActualizacion)}{po.actualizadoPor?.nombre ? `, ${po.actualizadoPor.nombre}` : ""}</p>}

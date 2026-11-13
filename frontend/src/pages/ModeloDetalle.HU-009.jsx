@@ -4,7 +4,8 @@ import { useParams, Link } from "react-router-dom";
 import { useApp } from "../store/appStore.jsx";
 import { BloqueCatalogo } from "../components/EstadoCatalogo";
 import { useCotizar } from "../components/CotizarModal";
-import { OPCIONES_TECHO, SIN_TECHO, CUOTAS_INICIAL, PLAZOS, COLOR_HEX, formatoSoles } from "../data/mockData";
+import { SIN_TECHO, CUOTAS_INICIAL, PLAZOS, COLOR_HEX, formatoSoles } from "../data/mockData";
+import { useTechos } from "../servicios/techos";
 import ModeloImg from "../components/ModeloImg";
 import FichaTecnica from "../components/FichaTecnica";
 import WhatsAppButton from "../components/WhatsAppButton.HU-013";
@@ -14,7 +15,6 @@ import { TarjetaModelo } from "./Modelos.HU-008";
 import { MODO_REAL } from "../lib/config";
 import { modeloPublicadoApi } from "../lib/api";
 
-const TECHOS = [SIN_TECHO, ...OPCIONES_TECHO];
 const INCLUYE = [
   ["Garantía oficial", "Unidad nueva con la garantía de la marca."],
   ["Trámite de placa", "Te acompañamos con la placa y la tarjeta de propiedad."],
@@ -38,6 +38,7 @@ function ModeloDetalle({ id }) {
   const [color, setColor] = useState("");
   const [foto, setFoto] = useState(null);
   const [techo, setTecho] = useState(SIN_TECHO.id);
+  const TECHOS = useTechos();
   const [inicial, setInicial] = useState(30);
   const [plazo, setPlazo] = useState(24);
   const [ficha, setFicha] = useState(null); const [despublicado, setDespublicado] = useState(false);
@@ -117,7 +118,7 @@ function ModeloDetalle({ id }) {
                 <p className="max-w-[16rem] pb-1 text-[12px] leading-snug text-slate-400">{conPrecio ? "Precio de la moto sin techo. No incluye matrícula ni SOAT; puede variar por zona." : "Pide tu cotización y un asesor te confirma el precio."}</p>
               </div>
               <div className="mt-6 rounded-2xl border border-slate-200 p-4 dark:border-white/10">
-                <p className="text-[13.5px] font-semibold text-marino dark:text-white">Techo de fibra <span className="font-normal text-slate-500">· adicional, se suma al precio</span></p>
+                <p className="text-[13.5px] font-semibold text-marino dark:text-white">Techo <span className="font-normal text-slate-500">· adicional referencial, se suma al precio</span></p>
                 <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Techo adicional">
                   {TECHOS.map((o) => (
                     <button key={o.id} type="button" role="radio" aria-checked={techo === o.id} onClick={() => setTecho(o.id)}

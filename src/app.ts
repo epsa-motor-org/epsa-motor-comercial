@@ -12,6 +12,7 @@ import { crearRutasUnidad } from './routes/unidad.routes';
 import { crearRutasTecho } from './routes/techo.routes';
 import { crearRutasLead } from './routes/lead.routes';
 import { crearRutasSede } from './routes/sede.routes';
+import { crearRutasTechoPublico } from './routes/techo.publico.routes';
 import { crearRutasMovimiento } from './routes/movimiento.routes';
 import { crearRutasPreparacionUnidad } from './routes/preparacion.unidad.routes';
 import { crearRutasInventario } from './routes/inventario.routes';
@@ -29,6 +30,7 @@ export function crearApp(fabrica?: FabricaCliente, fabricaPublica?: FabricaClien
   app.use(express.json({ limit: '32kb' }));
   app.use('/api/modelos', crearRutasModelo(fabricaPublica, fabrica));
   app.use('/api/sedes', crearRutasSede(fabricaPublica));
+  app.use('/api/techos', crearRutasTechoPublico(fabricaPublica));
   app.use('/api/leads', crearRutasLead(fabrica));
   app.use('/api/ventas', crearRutasTechoVenta(fabrica));
   app.use('/api/inventario', crearRutasInventario(fabrica));

@@ -19,9 +19,12 @@ import { fechaLarga } from "../../lib/validar";
 import { sinRespuesta, useConsultaCentral, useIntento } from "../../servicios/central";
 import { ubicacionDe } from "../../servicios/inventarioCentral";
 import * as S from "../../servicios/separacionCentral";
+import * as V from "../../servicios/ventaCentral";
 import { Aviso, Campo, Card, Modal, useToast } from "../ui";
 import { IconCheck } from "../Icons";
 import { ColorUnidad, fechaCompleta } from "./Central";
+import { BotonCancelar, NotaPermisoCancelar } from "./CancelarCentral";
+import { SEPARACION } from "../../servicios/cancelacionCentral";
 
 const NO_CONFIRMADO = "No se pudo confirmar si la separación se guardó porque falló la conexión. Vuelve a pulsar «Separar moto»: este mismo envío no se registrará dos veces.";
 const CAPTURA_DE = (a) => (a ? `${a.name}|${a.size}|${a.lastModified}` : "");
@@ -145,10 +148,9 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
       setA((x) => ({ ...x, confirmador: x.confirmador || (yoGerente ? f.usuarioActual.codusu : f.gerentes.length === 1 ? f.gerentes[0].codusu : "") }));
       const ini = S.decisionInicial(f.tiposTecho || [], unidad?.preparacion?.techo?.configuracion || "");
       setDecision(ini.decision); setCodtteCon(ini.codtte); setConfigurado(ini.configurado);
-      // Con un techo instalado, se propone ese mismo techo (es el único compatible además de «Por definir»)
-      const inst = S.techoInstaladoDe(unidad);
-      const tipoInst = inst ? S.tiposConTecho(f.tiposTecho || []).find((t) => t.codtte === inst.codtte) : null;
-      if (tipoInst) { setDecision(S.CON_TECHO); setCodtteCon(tipoInst.codtte); }
+      // Con un techo configurado o instalado, se propone ese mismo techo (es el único compatible además de «Por definir»)
+      const fijo = S.techoDeLaMoto(unidad, f.tiposTecho || []);
+      if (fijo && S.tiposConTecho(f.tiposTecho || []).some((t) => t.codtte === fijo.codtte)) { setDecision(S.CON_TECHO); setCodtteCon(fijo.codtte); }
     }).catch(setErrCarga);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { cargar(); }, [cargar]);
@@ -163,9 +165,10 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
   const tiposCon = S.tiposConTecho(form?.tiposTecho);
   const precio = S.precioListaDe(form, unidad);
   const cambiaConfigurado = Boolean(configurado && tipoTecho && tipoTecho.codtte !== configurado.codtte);
-  // Techo instalado (HU-033): solo ese techo o «Por definir» (la base rechaza lo demás con PT438)
-  const instaladoBase = S.techoInstaladoDe(unidad);
+  // Techo configurado o instalado (HU-004 y HU-033): solo ese techo o «Por definir» (la base rechaza lo demás con PT438)
+  const instaladoBase = S.techoDeLaMoto(unidad, form?.tiposTecho || []);
   const instalado = instaladoBase && tiposCon.some((t) => t.codtte === instaladoBase.codtte) ? instaladoBase : null;
+  const adicionalRef = decision === S.CON_TECHO ? S.adicionalDe(tipoTecho) : decision === S.SIN_TECHO ? 0 : null;
   const tiposConOfrecidos = instalado ? tiposCon.filter((t) => t.codtte === instalado.codtte) : tiposCon;
   const tocar = (k) => setTocados((p) => (p[k] ? p : { ...p, [k]: true }));
   // Al cambiar el medio de pago se borran los avisos del medio anterior
@@ -202,7 +205,7 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
     }
     if (decision === S.CON_TECHO && !tipoTecho) e.techo = "Elige el tipo de techo que eligió el comprador.";
     if (decision === S.SIN_TECHO && !tipoTecho) e.techo = "No hay un tipo «Sin techo» activo: elige otra opción.";
-    if (!e.techo && !S.compatibleConInstalado(instalado, decision, tipoTecho)) e.techo = `Esta moto tiene «${instalado.nombre}» instalado: elige ese techo o «Por definir».`;
+    if (!e.techo && !S.compatibleConInstalado(instalado, decision, tipoTecho)) e.techo = S.errorTechoMoto(instalado);
     if (!form?.responsables.some((r) => r.codusu === responsable)) e.responsable = "Elige quién será responsable de esta separación.";
     return e;
   }
@@ -460,9 +463,9 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
                 <div className="grid gap-2 sm:grid-cols-3" data-techo-opciones>
                   <Opcion nombre="sep-techo" valor={S.POR_DEFINIR} actual={decision} titulo="Por definir" texto="Aún no decide. La separación queda activa y el techo se registra después."
                     onElegir={(v) => { setDecision(v); setErr((p) => ({ ...p, techo: undefined })); }} />
-                  {tipoSin && <Opcion nombre="sep-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? "No disponible: esta moto ya tiene un techo instalado." : "Eligió la moto sin techo."}
+                  {tipoSin && <Opcion nombre="sep-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `No disponible: esta moto ya tiene un techo ${instalado.instalado ? "instalado" : "configurado"}.` : "Eligió la moto sin techo. No suma al precio."}
                     deshabilitada={Boolean(instalado)} onElegir={(v) => { setDecision(v); setErr((p) => ({ ...p, techo: undefined })); }} />}
-                  {tiposConOfrecidos.length > 0 && <Opcion nombre="sep-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene instalado («${instalado.nombre}»).` : "Eligió un techo. Su instalación se programa desde la ficha de la moto."}
+                  {tiposConOfrecidos.length > 0 && <Opcion nombre="sep-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene ${instalado.instalado ? "instalado" : "configurado"} («${instalado.nombre}»).` : "Eligió un techo. Su adicional se suma al precio al vender."}
                     onElegir={(v) => { setDecision(v); if (instalado) setCodtteCon(instalado.codtte); setErr((p) => ({ ...p, techo: undefined })); }} />}
                 </div>
               </fieldset>
@@ -470,11 +473,16 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
                 <Campo etiqueta="Tipo de techo" error={ver("techo")}>
                   <select id="sep-tipo-techo" className="field-input" value={codtteCon} onChange={(e) => { setCodtteCon(e.target.value); tocar("techo"); setErr((p) => ({ ...p, techo: undefined })); }}>
                     <option value="">Elige el tipo de techo</option>
-                    {tiposConOfrecidos.map((t) => <option key={t.codtte} value={t.codtte}>{t.nombre}{t.requiereInstalacion ? " (requiere instalación)" : ""}</option>)}
+                    {tiposConOfrecidos.map((t) => <option key={t.codtte} value={t.codtte}>{S.etiquetaTipoTecho(t)}</option>)}
                   </select>
                 </Campo>
               )}
               {decision !== S.CON_TECHO && ver("techo") && <p className="text-[12px] font-medium text-acento">{ver("techo")}</p>}
+              {typeof precio === "number" && adicionalRef !== null && (
+                <p className="rounded-lg bg-slate-50 px-3 py-2 text-[12.5px] text-slate-600 dark:bg-white/5 dark:text-slate-300" data-total-referencial={S.soles(precio + adicionalRef)}>
+                  Precio de la moto <span className="cifra">{S.soles(precio)}</span> + {decision === S.SIN_TECHO ? "sin techo" : `techo ${S.soles(adicionalRef)}`} = <span className="cifra font-semibold text-marino dark:text-white">{S.soles(precio + adicionalRef)}</span> referencial. El total se confirma al registrar la venta; el adelanto se descuenta una sola vez.
+                </p>
+              )}
               <p className="text-[12.5px] text-slate-500">Una vez elegido «Sin techo» o «Con techo», la decisión queda registrada y no se cambia después.</p>
               {configurado && !instalado && (
                 <p className="text-[12.5px] text-slate-500" data-techo-configurado={configurado.nombre}>
@@ -517,7 +525,8 @@ function textoTechoSeparacion(s) {
 // La decisión «Con techo» no programa la instalación: se avisa si la moto todavía no tiene ese techo configurado
 const faltaConfigurar = (d, techoFisico) => Boolean(d?.decision === S.CON_TECHO && d.requiereInstalacion && techoFisico?.codtte !== d.codtte);
 
-export function SeparacionActivaCard({ unidad, puedeTecho = true, onCambio, onVender }) {
+// HU-021: «Cancelar separación» (onCancelar) para el gerente, la administradora o el vendedor responsable vigente
+export function SeparacionActivaCard({ unidad, puedeTecho = true, onCambio, onVender, onCancelar }) {
   const toast = useToast();
   const activo = unidad?.comercial === "Separada";
   const configTecho = unidad?.preparacion?.techo?.configuracion || "";
@@ -563,6 +572,7 @@ export function SeparacionActivaCard({ unidad, puedeTecho = true, onCambio, onVe
         <div className="flex flex-wrap gap-2">
           {s?.rutaEvidencia && <button className="btn btn-secondary !py-2 text-[13px]" onClick={verCaptura} data-ver-captura>Ver captura</button>}
           {s && onVender && <button className="btn btn-primary !py-2 text-[13px]" onClick={() => onVender(s)} data-registrar-venta-separacion>Registrar venta</button>}
+          {s && <BotonCancelar tipo={SEPARACION} operacion={s} onCancelar={onCancelar} />}
         </div>
       </div>
       {consulta.error && !s && <div className="mt-3"><Aviso tipo="error">{S.faltaInstalar(consulta.error) ? S.FALTA_INSTALAR : `No se pudo cargar la separación: ${mensajeError(consulta.error)}`}</Aviso></div>}
@@ -591,42 +601,59 @@ export function SeparacionActivaCard({ unidad, puedeTecho = true, onCambio, onVe
           {filas.slice(2).map(([k, v]) => <div key={k} className="grid gap-1 py-2 sm:grid-cols-[11rem_1fr]"><dt className="text-slate-500">{k}</dt><dd className="font-semibold text-marino dark:text-white">{v}</dd></div>)}
         </dl>
       )}
+      {s && onCancelar && <NotaPermisoCancelar operacion={s} />}
       {eligiendo && s && <ElegirTechoModal unidad={unidad} comprador={s.comprador} guardar={(decision, tipo) => S.guardarTechoSeparacionApi(s.codsep, decision, tipo)} onClose={() => setEligiendo(false)} onGuardado={() => { setEligiendo(false); guardado(); }} />}
     </Card>
   );
 }
 
 // Registrar la decisión de techo que estaba «Por definir» (de una separación o de una venta). Se elige «Sin techo» o
-// «Con techo» y su tipo; después ya no se cambia. Con un techo instalado, solo ese techo es compatible.
-export function ElegirTechoModal({ unidad, comprador, guardar, onClose, onGuardado, que = "separación" }) {
+// «Con techo» y su tipo; después ya no se cambia. Con un techo configurado o instalado, solo ese techo es compatible.
+// En una venta («venta» con su precio base y lo recibido) se registra además el adicional acordado del techo y se ve
+// cómo quedan el total y el saldo: el servidor los recalcula en la misma venta, sin volver a sumar pagos ni adelanto.
+const montoTextoTecho = (n) => String(Math.round(Number(n) * 100) / 100).replace(".", ",");
+export function ElegirTechoModal({ unidad, comprador, guardar, onClose, onGuardado, que = "separación", venta = null }) {
   const toast = useToast();
   const [tipos, setTipos] = useState(null); const [errCarga, setErrCarga] = useState(null);
   const [decision, setDecision] = useState(""); const [codtteCon, setCodtteCon] = useState("");
+  const [adicional, setAdicional] = useState("");
   const [error, setError] = useState(""); const [guardando, setGuardando] = useState(false); const [intentado, setIntentado] = useState(false);
+  const esVenta = que === "venta" && venta;
+  const elegirTipo = (lista, codtte) => { setCodtteCon(codtte); const t = lista.find((x) => x.codtte === codtte); setAdicional(S.adicionalDe(t) !== null ? montoTextoTecho(S.adicionalDe(t)) : ""); };
   const cargar = useCallback(() => {
     setErrCarga(null);
     S.formularioSeparacionApi().then((f) => {
       const lista = f.tiposTecho || [];
       setTipos(lista);
-      const inst = S.techoInstaladoDe(unidad);
-      if (inst && S.tiposConTecho(lista).some((t) => t.codtte === inst.codtte)) { setDecision(S.CON_TECHO); setCodtteCon(inst.codtte); }
+      const fijo = S.techoDeLaMoto(unidad, lista);
+      if (fijo && S.tiposConTecho(lista).some((t) => t.codtte === fijo.codtte)) { setDecision(S.CON_TECHO); elegirTipo(lista, fijo.codtte); }
     }).catch(setErrCarga);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { cargar(); }, [cargar]);
   const tipoSin = S.tipoSinTecho(tipos || []);
   const tiposCon = S.tiposConTecho(tipos || []);
-  const instaladoBase = S.techoInstaladoDe(unidad);
+  const instaladoBase = S.techoDeLaMoto(unidad, tipos || []);
   const instalado = instaladoBase && tiposCon.some((t) => t.codtte === instaladoBase.codtte) ? instaladoBase : null;
   const tiposOfrecidos = instalado ? tiposCon.filter((t) => t.codtte === instalado.codtte) : tiposCon;
   const elegido = S.tipoDeDecision(tipos || [], decision, codtteCon);
+  const referencial = S.adicionalDe(elegido);
+  // Cuentas de la venta con la decisión elegida
+  const base = Number(venta?.precioBaseAcordado);
+  const recibido = Number(venta?.totalRecibido) || 0;
+  const nAdicional = decision === S.CON_TECHO ? S.leerMonto(adicional) : 0;
+  const total = esVenta && Number.isFinite(base) && base > 0 && Number.isFinite(nAdicional) ? Math.round((base + nAdicional) * 100) / 100 : null;
+  const saldo = total !== null ? Math.round((total - recibido) * 100) / 100 : null;
+  const eAdicional = esVenta && decision === S.CON_TECHO ? V.errorAdicional(adicional, referencial) : "";
   const falta = !decision ? "Elige qué decidió el comprador." : decision === S.CON_TECHO && !elegido ? "Elige el tipo de techo."
-    : !S.compatibleConInstalado(instalado, decision, elegido) ? `Esta moto tiene «${instalado.nombre}» instalado: elige ese techo.` : "";
+    : !S.compatibleConInstalado(instalado, decision, elegido) ? S.errorTechoMoto(instalado)
+    : eAdicional ? eAdicional
+    : esVenta && saldo !== null && saldo < 0 ? `Lo recibido (${S.soles(recibido)}) supera el nuevo total: revisa el adicional acordado.` : "";
   async function enviar(ev) {
     ev.preventDefault();
     setIntentado(true);
     if (falta || guardando) return;
     setGuardando(true); setError("");
-    try { await guardar(decision, elegido); toast("Techo guardado"); onGuardado(); }
+    try { await guardar(decision, elegido, decision === S.CON_TECHO ? S.montoParaEnviar(adicional) : undefined); toast("Techo guardado"); onGuardado(); }
     catch (e) { setError(S.faltaInstalar(e) ? S.FALTA_INSTALAR : sinRespuesta(e) ? "No se pudo confirmar si el techo se guardó porque falló la conexión. Vuelve a pulsar «Guardar techo»: no se duplica nada." : `No se pudo guardar el techo: ${mensajeError(e)}`); }
     finally { setGuardando(false); }
   }
@@ -645,19 +672,33 @@ export function ElegirTechoModal({ unidad, comprador, guardar, onClose, onGuarda
             <fieldset>
               <legend className="field-label">¿Qué decidió el comprador?</legend>
               <div className="grid gap-2 sm:grid-cols-2" data-techo-opciones>
-                {tipoSin && <Opcion nombre="ficha-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? "No disponible: esta moto ya tiene un techo instalado." : "Eligió la moto sin techo."} deshabilitada={Boolean(instalado)} onElegir={(v) => { setDecision(v); setError(""); }} />}
-                {tiposOfrecidos.length > 0 && <Opcion nombre="ficha-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene instalado («${instalado.nombre}»).` : "Su instalación se programa desde la ficha de la moto."} onElegir={(v) => { setDecision(v); if (instalado) setCodtteCon(instalado.codtte); setError(""); }} />}
+                {tipoSin && <Opcion nombre="ficha-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `No disponible: esta moto ya tiene un techo ${instalado.instalado ? "instalado" : "configurado"}.` : "Eligió la moto sin techo. No suma al precio."} deshabilitada={Boolean(instalado)} onElegir={(v) => { setDecision(v); setError(""); }} />}
+                {tiposOfrecidos.length > 0 && <Opcion nombre="ficha-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene ${instalado.instalado ? "instalado" : "configurado"} («${instalado.nombre}»).` : esVenta ? "Su adicional se suma al total de la venta." : "Su instalación se programa desde la ficha de la moto."} onElegir={(v) => { setDecision(v); if (instalado) elegirTipo(tipos, instalado.codtte); setError(""); }} />}
               </div>
             </fieldset>
             {decision === S.CON_TECHO && (
               <Campo etiqueta="Tipo de techo" error={intentado && !elegido ? "Elige el tipo de techo." : undefined}>
-                <select id="ficha-tipo-techo" className="field-input" value={codtteCon} onChange={(e) => { setCodtteCon(e.target.value); setError(""); }}>
+                <select id="ficha-tipo-techo" className="field-input" value={codtteCon} onChange={(e) => { elegirTipo(tipos, e.target.value); setError(""); }}>
                   <option value="">Elige el tipo de techo</option>
-                  {tiposOfrecidos.map((t) => <option key={t.codtte} value={t.codtte}>{t.nombre}{t.requiereInstalacion ? " (requiere instalación)" : ""}</option>)}
+                  {tiposOfrecidos.map((t) => <option key={t.codtte} value={t.codtte}>{S.etiquetaTipoTecho(t)}</option>)}
                 </select>
               </Campo>
             )}
-            {intentado && falta && decision !== S.CON_TECHO && <p className="text-[12px] font-medium text-acento">{falta}</p>}
+            {esVenta && decision === S.CON_TECHO && elegido && (
+              <Campo etiqueta="Adicional del techo (S/)" error={intentado || adicional ? eAdicional || undefined : undefined} ayuda={V.ayudaAdicional(referencial)}>
+                <input id="ficha-adicional-techo" className="field-input cifra" inputMode="decimal" autoComplete="off" value={adicional} onChange={(e) => { setAdicional(S.filtrarMonto(e.target.value, V.MAX_ENTEROS_ADICIONAL, adicional)); setError(""); }} />
+              </Campo>
+            )}
+            {esVenta && decision && total !== null && (
+              <dl className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-[13.5px] dark:border-white/10 dark:bg-white/5" data-recalculo-venta>
+                <div className="flex justify-between gap-3"><dt className="text-slate-500">Precio base de la venta</dt><dd className="cifra font-semibold">{S.soles(base)}</dd></div>
+                <div className="flex justify-between gap-3"><dt className="text-slate-500">{decision === S.SIN_TECHO ? "Sin techo" : S.rotuloTecho(elegido?.nombre)}</dt><dd className="cifra font-semibold">+ {S.soles(decision === S.CON_TECHO ? nAdicional : 0)}</dd></div>
+                <div className="flex justify-between gap-3 border-t border-slate-200 pt-1.5 dark:border-white/10" data-nuevo-total={total}><dt className="font-semibold">Nuevo total</dt><dd className="cifra font-bold">{S.soles(total)}</dd></div>
+                <div className="flex justify-between gap-3"><dt className="text-slate-500">Recibido (no se vuelve a sumar)</dt><dd className="cifra">− {S.soles(recibido)}</dd></div>
+                <div className="flex justify-between gap-3" data-nuevo-saldo={saldo}><dt className="font-semibold">Nuevo saldo</dt><dd className={`cifra font-bold ${saldo < 0 ? "text-acento" : ""}`}>{S.soles(saldo)}</dd></div>
+              </dl>
+            )}
+            {intentado && falta && !(decision === S.CON_TECHO && (!elegido || eAdicional)) && <p className="text-[12px] font-medium text-acento" data-error-elegir-techo>{falta}</p>}
           </>
         )}
         {error && <Aviso tipo="error"><span data-error-techo>{error}</span></Aviso>}

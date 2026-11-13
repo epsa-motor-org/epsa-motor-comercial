@@ -460,13 +460,13 @@ for (const [code, status] of [
     const respuesta = await request();
     assert.equal(respuesta.status, status);
     if (code === 'PT438') assert.equal(respuesta.body.message,
-      'La elección de techo no es compatible con el techo instalado en esta unidad');
+      'La elección de techo no es compatible con el techo instalado o configurado en esta unidad');
     const mensajes: Record<string, string> = {
       PT434: 'La captura de la transferencia no está guardada o no corresponde a esta moto',
       PT435: 'El adelanto no puede superar el precio de lista de la moto',
       PT436: 'La moto no tiene precio de lista registrado; regístralo en Modelos antes de separar',
       PT437: 'La fecha del adelanto no puede ser de hace más de 30 días',
-      PT438: 'La elección de techo no es compatible con el techo instalado en esta unidad',
+      PT438: 'La elección de techo no es compatible con el techo instalado o configurado en esta unidad',
       PT439: 'El tipo de techo no existe o está inactivo',
       PT440: 'La elección de techo ya está guardada y no se puede modificar',
       PT441: 'La separación ya no está activa'
