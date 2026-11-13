@@ -1,8 +1,8 @@
 // Sprint 2 · Servicios de la base central (API de Express + Supabase)
 // Todas las lecturas y escrituras pasan por la API con la sesión del usuario: el navegador no guarda copias.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BUCKET_FOTOS, borrarArchivoStorage, cacheConsultas, modelosAdminApi, pedir, preparacionListaApi, seriesUnidadesApi, subirArchivoStorage, ubicacionInicialSqlApi } from "../lib/api";
-import { preparacionDesdeOperativa } from "./inventarioCentral";
+import { BUCKET_FOTOS, borrarArchivoStorage, cacheConsultas, modelosAdminApi, pedir, preparacionListaApi, seriesUnidadesApi, subirArchivoStorage, techoComercialUnidadesApi, ubicacionInicialSqlApi } from "../lib/api";
+import { etapaComercialDe, preparacionDesdeOperativa } from "./inventarioCentral";
 import { ApiError, mensajeError } from "../lib/errores";
 import useAutoRefresco from "../hooks/useAutoRefresco";
 
@@ -58,12 +58,16 @@ export function unidadDesdeApi(x = {}) {
   const preparacion = po ? preparacionDesdeOperativa(po, x.techo?.nomtte) : { central: true, estado: prep, lista_para_entrega: /lista para entrega/i.test(prep), techo: { configuracion: x.techo?.nomtte || "" } };
   // HU-005: una moto separada sin techo configurado tiene el techo «Por definir» (el comprador aún no decide)
   if (comercial === "Separada" && !preparacion.techo?.configuracion) preparacion.techo = { ...preparacion.techo, porDefinir: true };
+  // HU-006 (CP-006-06): decisión de techo del comprador (separación activa o venta registrada)
+  const techoComercial = x.techoComercial && ["Separada", "Vendida"].includes(comercial) ? x.techoComercial : null;
+  const etapaComercial = etapaComercialDe(po, techoComercial);
+  if (etapaComercial) Object.assign(preparacion, { etapaComercial, estado: etapaComercial.etapa, nota: etapaComercial.nota, lista_para_entrega: false });
   return {
     coduni: String(x.coduni), codmod: x.modelo?.codmod ? String(x.modelo.codmod) : "", nommod: x.modelo?.nommod || "",
     coluni: x.color || "", nummotuni: x.nummotuni || "", chauni: x.chauni || "",
     ubicacion: x.ubicacionConfirmada || null,
     movimiento_activo: x.movimientoActivo ? { ...x.movimientoActivo, origen: x.ubicacionConfirmada || null } : null,
-    comercial, preparacion,
+    comercial, preparacion, techoComercial,
   };
 }
 async function paginas(ruta, params, items) {
@@ -83,20 +87,25 @@ export const inventarioApi = ({ codubi, codmod } = {}) => unaVez(`inventario:${c
 let sinSeries = false;
 const leerSeries = () => (sinSeries ? Promise.resolve(null) : seriesUnidadesApi().catch((e) => { if (e?.detalle?.faltaSql) sinSeries = true; return null; }));
 // HU-033: preparación de todas las motos en una consulta (función SQL), aunque la API publicada sea anterior
+// HU-006: decisión de techo de cada moto separada o vendida (función SQL 202611130001); sin ella, se muestra como antes
+let sinTechoComercial = false;
+const leerTechoComercial = () => (sinTechoComercial ? Promise.resolve(null) : techoComercialUnidadesApi().catch((e) => { if (e?.detalle?.faltaSql || e?.status === 403 || e?.status === 404) sinTechoComercial = true; return null; }));
 let sinPreparacion = false;
 const leerPreparacion = () => (sinPreparacion ? Promise.resolve(null) : preparacionListaApi().catch((e) => { if (e?.detalle?.faltaSql || e?.status === 403) sinPreparacion = true; return null; }));
 async function leerInventario({ codubi, codmod }) {
-  const [inv, ubic, series, prep] = await Promise.all([
+  const [inv, ubic, series, prep, techos] = await Promise.all([
     paginas("/api/inventario", { codubi, codmod }, (d) => d?.items),
     pedir("/api/ubicaciones").then((r) => r.data || []).catch(() => null),
     leerSeries(),
     leerPreparacion(),
+    leerTechoComercial(),
   ]);
   const porUnidad = new Map((Array.isArray(series) ? series : []).map((s) => [String(s.coduni), s]));
   const prepPorUnidad = new Map((Array.isArray(prep) ? prep : []).map((p) => [String(p.coduni), p]));
+  const techoPorUnidad = new Map((Array.isArray(techos) ? techos : []).map((t) => [String(t.coduni), t]));
   const unidades = inv.lista.map((x) => {
-    const s = porUnidad.get(String(x.coduni)); const p = prepPorUnidad.get(String(x.coduni));
-    return unidadDesdeApi({ ...x, ...(s ? { nummotuni: x.nummotuni || s.nummotuni, chauni: x.chauni || s.chauni } : {}), ...(p ? { preparacionOperativa: p } : {}) });
+    const s = porUnidad.get(String(x.coduni)); const p = prepPorUnidad.get(String(x.coduni)); const t = techoPorUnidad.get(String(x.coduni));
+    return unidadDesdeApi({ ...x, ...(s ? { nummotuni: x.nummotuni || s.nummotuni, chauni: x.chauni || s.chauni } : {}), ...(p ? { preparacionOperativa: p } : {}), ...(t ? { techoComercial: t } : {}) });
   });
   const ubicaciones = ubic ? ubic.map((l) => ({ codubi: String(l.codubi), nomubi: l.nomubi, tipubi: l.tipubi, estubi: l.estubi !== false }))
     : [...new Map(unidades.filter((u) => u.ubicacion).map((u) => [u.ubicacion.codubi, { ...u.ubicacion, estubi: true }])).values()];

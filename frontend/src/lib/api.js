@@ -212,6 +212,10 @@ export const eliminarModeloApi = (codmod) => rpc("hu012_eliminar_modelo", { p_co
 export const comprasPendientesSqlApi = ({ origen, limite = 200, offset = 0 } = {}) => rpc("hu023_consultar_compras_pendientes", { p_origen: origen || null, p_limite: limite, p_offset: offset });
 // HU-033 (funciones de Michelle): preparación de cada moto, su historial y el registro de avances
 export const preparacionListaApi = () => rpc("hu033_preparacion_listar");
+// HU-006: decisión de techo del comprador de cada moto separada o vendida (CP-006-06)
+export const techoComercialUnidadesApi = () => rpc("hu006_techo_comercial_unidades");
+// HU-021 · Separaciones y ventas canceladas de una moto (solo lectura; el vendedor ve las suyas)
+export const cancelacionesUnidadApi = (coduni) => rpc("hu021_cancelaciones_unidad", { p_coduni: Number(coduni) });
 export const preparacionUnidadApi = (coduni) => rpc("hu033_consultar_preparacion_unidad", { p_coduni: Number(coduni) });
 export const actualizarPreparacionApi = (coduni, d, clave) => rpc("hu033_actualizar_preparacion_unidad", {
   p_coduni: Number(coduni), p_etapa: d.etapa, p_estado: d.estado, p_version_esperada: Number(d.version),

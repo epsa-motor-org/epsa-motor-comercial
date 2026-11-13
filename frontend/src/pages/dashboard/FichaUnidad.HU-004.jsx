@@ -21,6 +21,7 @@ const DESCRIPCION_TECHO = {
   "Sin techo": "La unidad no lleva techo instalado.",
   Lona: "Techo de lona de fábrica. No necesita proveedor externo.",
   "Techo clásico de fibra": "Fibra fabricada por EPSA Motor. No necesita proveedor externo.",
+  "Fibra clásica equipada": "Fibra clásica con su equipamiento completo. No necesita proveedor externo.",
   "Techo de fibra deportiva": "Fibra deportiva hecha por un proveedor externo: FIVESA, JAVICAR o FIBRAT.",
 };
 const limpiar = (t) => String(t || "").trim().replace(/\s+/g, " ");

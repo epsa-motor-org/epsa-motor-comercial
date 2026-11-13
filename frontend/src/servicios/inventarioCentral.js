@@ -35,6 +35,8 @@ export function techoDe(p) {
 // Etapa de preparación visible
 export function preparacionDe(p) {
   if (!p) return { etapa: "Sin datos", tono: "gris", nota: "" };
+  // CP-006-06: la decisión de techo del comprador puede dejar pendiente la entrega (ver etapaComercialDe)
+  if (p.etapaComercial) return p.etapaComercial;
   // Inventario central: el estado de preparación viene tal cual de la base (HU-004)
   if (p.central && p.operativa) return etapaOperativa(p.operativa);
   if (p.central) return p.estado ? { etapa: p.estado, tono: p.lista_para_entrega ? "verde" : "celeste", nota: "" } : { etapa: "Sin registrar", tono: "gris", nota: "" };
@@ -50,7 +52,7 @@ export function preparacionDe(p) {
 export const ETAPAS_FILTRO = ["Pendiente de armado", "Techo por definir", "Falta instalar techo", "Techo en proceso", "Por confirmar entrega", "Lista para entrega"];
 // Con la base central (HU-033 de Michelle) la entrega no se marca a mano: está lista cuando se cumplen sus etapas
 // La moto se vende con o sin techo: solo el techo que eligió el cliente y falta armar queda pendiente
-export const ETAPAS_FILTRO_CENTRAL = ["Pendiente de armado del techo", "Techo en armado", "Lista para entrega"];
+export const ETAPAS_FILTRO_CENTRAL = ["Techo por definir", "Techo elegido sin programar", "Pendiente de armado del techo", "Techo en armado", "Lista para entrega"];
 
 // HU-033 · Etapa visible a partir de la preparación guardada. La moto se vende con o sin techo: solo queda
 // pendiente el techo que eligió el cliente al separar y que falta armar (instalar).
@@ -63,6 +65,22 @@ export function etapaOperativa(po) {
     : { etapa: "Pendiente de armado del techo", tono: "ambar", nota: t.configuracion };
   return { etapa: "Lista para entrega", tono: "verde", nota: "" };
 }
+// HU-006 · CP-006-06: la moto con separación activa o venta muestra su preparación junto con la decisión de techo del
+// comprador. Si el techo sigue «Por definir», o si eligió un techo que la moto todavía no tiene configurado, no figura
+// «Lista para entrega» aunque su preparación física no tenga pendientes. Solo cambia lo que se muestra: la venta no
+// configura, instala, arma ni entrega nada. c = { decision, codtte, nombre, requiereInstalacion, origen }.
+export function etapaComercialDe(po, c) {
+  if (!c) return null;
+  const quien = c.origen === "Venta" ? "El comprador" : "El comprador de la separación";
+  if (c.decision === "Por definir") return { etapa: "Techo por definir", tono: "ambar", nota: `${quien} aún no decide el techo. Cuando lo elija, se programa su instalación.` };
+  if (c.decision === "Con techo" && c.requiereInstalacion && String(po?.techo?.codtte || "") !== String(c.codtte || "")) {
+    return { etapa: "Techo elegido sin programar", tono: "ambar", nota: `${quien} eligió ${c.nombre || "un techo"}: configúralo en «Configuración de techo» de la ficha para programar su instalación.` };
+  }
+  return null;
+}
+// Etapa visible de una moto (con la decisión de techo del comprador, si la tiene)
+export const etapaConTechoComercial = (u) => u?.preparacion?.etapaComercial || preparacionDe(u?.preparacion);
+
 // Preparación de la base central en la forma que usan las pantallas
 export function preparacionDesdeOperativa(po, nomtte) {
   const e = etapaOperativa(po);

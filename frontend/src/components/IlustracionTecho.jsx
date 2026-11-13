@@ -39,7 +39,7 @@ function Base() {
   );
 }
 
-// Parantes de fibra (techos Básico, Superlujo y Deportivo)
+// Parantes de fibra (techos de fibra clásico, clásico equipado y deportivo)
 const Parantes = () => (
   <g fill={MARINO}>
     <rect x="38" y="44" width="6" height="48" rx="2" />
@@ -101,8 +101,10 @@ const TECHOS = {
   ),
 };
 
+// Los techos del catálogo (servicios/techos.js) usan el dibujo más parecido
+const DIBUJO = { clasico: "basico", equipado: "superlujo" };
 export default function IlustracionTecho({ tipo = "ninguno", nombre = "", className = "" }) {
-  const Techo = TECHOS[tipo] || TECHOS.ninguno;
+  const Techo = TECHOS[DIBUJO[tipo] || tipo] || TECHOS.ninguno;
   return (
     <svg viewBox="0 0 240 155" className={className} role="img" aria-label={`Torito ${tipo === "ninguno" ? "sin techo" : `con techo ${nombre}`} (ilustración referencial)`} xmlns="http://www.w3.org/2000/svg">
       <g transform="translate(-6 0)">

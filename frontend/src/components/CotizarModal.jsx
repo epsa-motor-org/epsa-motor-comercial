@@ -5,7 +5,8 @@ import { useApp } from "../store/appStore.jsx";
 import { MODO_REAL, WHATSAPP_NUMERO } from "../lib/config";
 import { IconWhatsapp } from "./Icons";
 import ModeloImg from "./ModeloImg";
-import { COLORES, OPCIONES_TECHO, SIN_TECHO, formatoSoles } from "../data/mockData";
+import { COLORES, formatoSoles } from "../data/mockData";
+import { useTechos } from "../servicios/techos";
 import { registrarInteresadoWebApi } from "../lib/api";
 import { mensajeError } from "../lib/errores";
 import { soloDigitos, soloLetrasNombre, esNombreYApellido, esCelular, limpiarTexto, formatoTelefono, MSJ } from "../lib/validar";
@@ -14,7 +15,6 @@ import { POLITICA_DATOS, SEGUNDOS_MINIMOS, TEXTO_CONSENTIMIENTO, anotarEnvio, li
 const Ctx = createContext(() => {});
 export const useCotizar = () => useContext(Ctx);
 
-const TECHOS = [SIN_TECHO, ...OPCIONES_TECHO];
 const VACIO = { tipo: "cotizar", nombre: "", telefono: "", modelo: "", color: "", sede: "", techo: "", pago: "Financiamiento", mensaje: "", acepta: false, trampa: "" };
 const MAX_MENSAJE = 400;
 // Colores para elegir: los del modelo en la base; si el modelo todavía no tiene, todos los de la marca
@@ -25,6 +25,7 @@ const colorInicial = (m, pedido) => (m?.colores?.length ? (m.colores.includes(pe
 export function CotizarProvider({ children }) {
   const app = useApp();
   const { publicos, sedes } = app;
+  const TECHOS = useTechos();
   const [abierto, setAbierto] = useState(false);
   const [f, setF] = useState(VACIO);
   const [err, setErr] = useState({});
@@ -42,7 +43,7 @@ export function CotizarProvider({ children }) {
     const color = colorInicial(m, pre.color);
     setF({ ...VACIO, tipo: consulta ? "consulta" : "cotizar", modelo: m?.id || "", color, techo: TECHOS.some((t) => t.id === pre.techo) ? pre.techo : "", sede: pre.sede && sedes.some((s) => s.nombre === pre.sede) ? pre.sede : sedes[0]?.nombre || "" });
     setErr({}); setHecho(null); setVerPolitica(false); enviando.current = false; abiertoEn.current = Date.now(); setAbierto(true);
-  }, [publicos, sedes]);
+  }, [publicos, sedes, TECHOS]);
 
   const consulta = f.tipo === "consulta";
   const modelo = publicos.find((m) => m.id === f.modelo);
@@ -199,7 +200,7 @@ export function CotizarProvider({ children }) {
             </Campo>
             {!consulta && <>
               <fieldset className="sm:col-span-2">
-                <legend className="field-label">Techo de fibra <span className="font-normal text-slate-500">(adicional: se suma al precio de la moto)</span></legend>
+                <legend className="field-label">Techo <span className="font-normal text-slate-500">(adicional referencial: se suma al precio de la moto)</span></legend>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Techo">
                   {TECHOS.map((t) => (
                     <button key={t.id} type="button" role="radio" aria-checked={f.techo === t.id} onClick={() => set("techo", t.id)}

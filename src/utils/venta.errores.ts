@@ -30,6 +30,7 @@ export function responderErrorVenta(res: Response, error: unknown) {
     PT620: [422, 'El adicional acordado del techo no es válido'],
     PT621: [422, 'Los pagos recibidos superan el total recalculado de la venta'],
     PT622: [400, 'Los parámetros de búsqueda de ventas no son válidos'],
+    PT623: [409, 'La venta está cancelada y ya no se puede modificar'],
     '23503': [404, 'No se encontró una unidad, comprador, responsable o sede'],
     '23505': [409, 'La unidad o la solicitud ya fue registrada'],
     '23514': [422, 'Los datos de venta o pago no cumplen las reglas permitidas'],
