@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { autenticar, exigirRoles } from '../middleware/autenticacion';
 import type { FabricaCliente } from '../middleware/autenticacion';
 import { obtenerFormulario, registrarComprador } from '../controllers/separacion.apoyo.controller';
+import { cancelarSeparacion, consultarCancelacionSeparacion } from '../controllers/cancelacion.controller';
 
 const ROLES_SEPARACION = ['Gerente', 'Administradora', 'Vendedor'] as const;
 
@@ -12,5 +13,7 @@ export function crearRutasSeparacionApoyo(fabrica?: FabricaCliente) {
   router.use(autenticar(fabrica), exigirRoles(...ROLES_SEPARACION));
   router.get('/formulario', obtenerFormulario);
   router.post('/compradores', registrarComprador);
+  router.post('/:codsep/cancelacion', cancelarSeparacion);
+  router.get('/:codsep/cancelacion', consultarCancelacionSeparacion);
   return router;
 }

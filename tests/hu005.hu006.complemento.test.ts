@@ -86,7 +86,7 @@ test('HU-006 HTTP: errores de la consulta controlados y sin detalles internos', 
 
 test('HU-005 HTTP: adelanto mínimo, monto fuera de rango y base sin la RPC se responden sin error 500', async () => {
   const casos: Array<[string, number, RegExp]> = [
-    ['PT442', 422, /mínimo es S\/ 100\.00/], ['22003', 422, /excede el rango/], ['22P02', 400, /formato inválido/],
+    ['PT442', 422, /adelanto mínimo para separar es S\/ 100\.00/], ['22003', 422, /excede el rango/], ['22P02', 400, /formato inválido/],
     ['PGRST202', 503, /falta actualizar la base/], ['PT435', 422, /precio de lista/]
   ];
   for (const [codigo, status, mensaje] of casos) {
