@@ -74,10 +74,10 @@ test('HU-005/HU-006 PostgreSQL: adelanto mínimo y consulta de la venta de una m
     escalar<VentaSQL>('SELECT public.hu006_crear_venta($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14::uuid) r',
       ventaParams(coduni, opciones));
   const hoy = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date());
-  const crearSeparacion = async (coduni: string, codcli = 1, decision: 'Por definir' | 'Sin techo' | 'Con techo' = 'Por definir', codtte: number | null = null, monto = 100) => {
+  const crearSeparacion = async (coduni: string, codcli = 1, decision: 'Por definir' | 'Sin techo' | 'Con techo' = 'Por definir', codtte: number | null = null, monto = 100, clave = claveNueva()) => {
     const separacion = await escalar<{ codsep: string }>(
       'SELECT public.hu005_crear_separacion($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) r',
-      [coduni, codcli, 3, null, monto, hoy, 'Efectivo', null, null, 'Recepción en caja', true, claveNueva(), decision, codtte]);
+      [coduni, codcli, 3, null, monto, hoy, 'Efectivo', null, null, 'Recepción en caja', true, clave, decision, codtte]);
     if (decision !== 'Por definir')
       await escalar('SELECT public.hu005_guardar_techo_separacion($1,$2,$3) r', [separacion.codsep, decision, codtte]);
     return separacion.codsep;
@@ -155,6 +155,23 @@ test('HU-005/HU-006 PostgreSQL: adelanto mínimo y consulta de la venta de una m
     assert.equal(await separaciones(codunis[0]!), 0);
     const estado = await propietario(async () => (await db.query<{ e: string }>('SELECT estcomuni e FROM public.unidad WHERE coduni=$1', [codunis[0]])).rows[0]!.e);
     assert.equal(estado, 'Disponible');
+  });
+
+  await t.test('S/ 100.01 es aceptado, queda persistido exacto y el replay idempotente no duplica el adelanto', async () => {
+    await login(3);
+    const unidad = codunis[24]!;
+    const clave = claveNueva();
+    const primera = await crearSeparacion(unidad, 1, 'Por definir', null, 100.01, clave);
+    const replay = await crearSeparacion(unidad, 1, 'Por definir', null, 100.01, clave);
+    assert.equal(replay, primera, 'el replay recupera la misma separación');
+
+    const persistido = await propietario(() => escalar<{ cantidad: number; monto: number; conClave: number }>(
+      `SELECT jsonb_build_object('cantidad',count(*)::int,'monto',max(monadesep),
+        'conClave',count(*) FILTER (WHERE idempotenciasep=$2)::int) r
+       FROM public.separacion WHERE coduni=$1`, [unidad, clave]));
+    assert.deepEqual(persistido, { cantidad: 1, monto: 100.01, conClave: 1 });
+    assert.equal(await propietario(() => escalar<string>(
+      'SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [unidad])), 'Separada');
   });
 
   await t.test('Desde S/ 100.00 hasta el precio de lista se separa; un céntimo más se rechaza (PT435)', async () => {
