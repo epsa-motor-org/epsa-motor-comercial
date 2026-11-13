@@ -67,6 +67,10 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   };
   const cancelarVenta = (codven: string, motivo: string, obs: string | null = null, clave = randomUUID()) =>
     escalar<Record<string, unknown>>('SELECT public.hu021_cancelar_venta($1,$2,$3,$4::uuid) r', [codven, motivo, obs, clave]);
+  const corregirRelacion = (codven: string, codcliNuevo: string | null, coduniNuevo: string | null,
+    version: number, motivo = 'Corrección de prueba', clave = randomUUID()) =>
+    escalar<Record<string, unknown>>('SELECT public.hu022_corregir_venta($1,$2,$3,$4,$5,$6::uuid) r',
+      [codven, codcliNuevo, coduniNuevo, version, motivo, clave]);
   const cancelarSeparacion = (codsep: string, motivo: string, obs: string | null = 'Adelanto en caja', clave = randomUUID()) =>
     escalar<Record<string, unknown>>('SELECT public.hu021_cancelar_separacion($1,$2,$3,$4::uuid) r', [codsep, motivo, obs, clave]);
   const estadoUnidad = (coduni: string) => propietario(() => escalar<string>('SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [coduni]));
@@ -101,6 +105,8 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     // Se puede volver a ejecutar
     '202611130001_hu005_hu006_techo_configurado_y_catalogo.sql'
   ]) await db.exec(leer(`supabase/migrations/${migration}`));
+  await db.exec(leer('supabase/migrations/202611130002_hu022_correccion_relacion_venta.sql'));
+  await db.exec(leer('supabase/migrations/202611130003_hu022_estado_unidad_movimiento_activo.sql'));
   await db.exec(`INSERT INTO auth.users(id) VALUES ${UUIDS.map(id => `('${id}')`).join(',')};
     INSERT INTO public.rol(nomrol,estrol) VALUES ('Gerente',true),('Administradora',true),('Vendedor',true);
     INSERT INTO public.usuario(uuidusu,codrol,nomusu,apepatusu,corusu,estusu)
@@ -110,7 +116,7 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
              ('${UUIDS[3]}',3,'Vendedora','Dos','vendedora2@qa.test',true);
     INSERT INTO public.tipomotocar(nomtmo) VALUES ('Motocar QA');
     INSERT INTO public.modelo(codtmo,nommod,desmod,carmod,premod) VALUES (1,'Torito QA','Modelo sintético','Características',18335);
-    INSERT INTO public.cliente(nomcli,estcli) VALUES ('Comprador Uno',true);
+    INSERT INTO public.cliente(nomcli,estcli) VALUES ('Comprador Uno',true),('Comprador Dos',true),('Comprador Tres',true),('Comprador Inactivo',false);
     UPDATE public.tipotecho SET reqinsttte = (nomtte <> 'Sin techo'), esttte = true;
     INSERT INTO public.estadopreparacion(nomepr) VALUES ('Preparación QA');
     INSERT INTO public.ubicacion(nomubi,tipubi) VALUES ('Comas HU006','Sede');
@@ -126,6 +132,17 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   await escalar('SELECT public.hu002_identificar_unidades($1,$2::jsonb) r', [compra, JSON.stringify(unidades)]);
   const u = await propietario(async () => (await db.query<{ coduni: string }>(
     "SELECT coduni::text FROM public.unidad WHERE nummotuni LIKE 'TC-M-%' ORDER BY coduni")).rows.map(r => r.coduni));
+  const compraHu022 = await propietario(async () => {
+    const nuevo = await db.query<{ codcom: string }>(
+      "INSERT INTO public.compra(codmod,codusu,colcom,cancom) VALUES (1,1,'Azul',12) RETURNING codcom::text");
+    const codcomHu022 = nuevo.rows[0]!.codcom;
+    await db.query("INSERT INTO public.factura_compra(codcom,emisor,numero,fecha_emision,cantidad_motos,codusu) VALUES ($1,'QA','HU022-FAC-1','2026-11-13',12,1)", [codcomHu022]);
+    await db.query(`INSERT INTO public.unidad(codcom,codmod,nummotuni,chauni,coluni,estcomuni)
+      SELECT $1,1,'H022-M-' || n,'H022-C-' || n,'Azul','Disponible' FROM generate_series(1,12) n`, [codcomHu022]);
+    return codcomHu022;
+  });
+  const unidadesHu022 = await propietario(async () => (await db.query<{ coduni: string }>(
+    "SELECT coduni::text FROM public.unidad WHERE codcom=$1 ORDER BY coduni", [compraHu022])).rows.map(r => r.coduni));
   const tipo = await propietario(async () => Object.fromEntries((await db.query<{ nomtte: string; codtte: string }>(
     'SELECT nomtte,codtte::text FROM public.tipotecho')).rows.map(f => [f.nomtte, f.codtte])));
   await t.after(() => db.close());
@@ -300,5 +317,266 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     await assert.rejects(escalar('SELECT public.hu021_cancelaciones_unidad($1) r', [0]), error('PT650'));
     await db.exec('RESET ROLE; SET ROLE anon');
     await assert.rejects(db.query('SELECT public.hu021_cancelaciones_unidad(1)'), error('42501'));
+  });
+
+  await t.test('HU-022: Admin corrige solo comprador; vendedor se rechaza; replay conserva un único evento y versión', async () => {
+    await login(3);
+    const ventaBase = await venta(u[11]!, { decision: 'Por definir' });
+    await assert.rejects(corregirRelacion(String(ventaBase.codven), '2', null, 1), error('42501'));
+    await login(2);
+    const clave = randomUUID();
+    const primera = await corregirRelacion(String(ventaBase.codven), '2', null, 1, 'Comprador capturado mal', clave);
+    const op = (primera.operaciones as Array<Record<string, unknown>>)[0]!;
+    assert.equal(op.codcliAnterior, '1');
+    assert.equal(op.codcliNuevo, '2');
+    assert.equal(op.coduniAnterior, u[11]);
+    assert.equal(op.coduniNueva, u[11]);
+    assert.equal(op.versionRelacion, 2);
+    const replay = await corregirRelacion(String(ventaBase.codven), '2', null, 1, 'Comprador capturado mal', clave);
+    assert.equal(replay.reutilizada, true);
+    await assert.rejects(corregirRelacion(String(ventaBase.codven), '3', null, 1, 'Otro payload', clave), error('PT687'));
+    await assert.rejects(corregirRelacion(String(ventaBase.codven), '3', null, 1), error('PT683'));
+    const fila = await propietario(() => escalar<{ codcli: string; hu022_versionrelacion: number }>(
+      "SELECT jsonb_build_object('codcli',codcli::text,'hu022_versionrelacion',hu022_versionrelacion) r FROM public.venta WHERE codven=$1", [ventaBase.codven]));
+    assert.deepEqual(fila, { codcli: '2', hu022_versionrelacion: 2 });
+    const eventos = await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu022_correccion_relacion_detalle WHERE codven=$1', [ventaBase.codven]));
+    assert.equal(eventos, 1);
+    const listado = await escalar<{ items: Array<{ codven: string; comprador: { codcli: string }; unidad: { coduni: string } }> }>(
+      'SELECT public.hu006_listar_ventas(NULL,100,0) r');
+    const filaLista = listado.items.find(x => x.codven === String(ventaBase.codven));
+    assert.deepEqual([filaLista?.comprador.codcli,filaLista?.unidad.coduni], ['2',u[11]]);
+  });
+
+  await t.test('HU-022: cambio de unidad solamente libera coherentemente la anterior y conserva snapshots físicos/comerciales', async () => {
+    await login(3);
+    const ventaBase = await venta(u[12]!, { decision: 'Sin techo' });
+    const finanzasAntes = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('impven',impven,'prebaseven',prebaseven,'adicionalacordadoven',adicionalacordadoven) r FROM public.venta WHERE codven=$1", [ventaBase.codven]));
+    const fisicoOrigenAntes = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('codtte',codtte,'coluni',coluni,'codpro',codpro,'codepr',codepr,'codubi',codubi) r FROM public.unidad WHERE coduni=$1", [u[12]]));
+    const fisicoDestinoAntes = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('codtte',codtte,'coluni',coluni,'codpro',codpro,'codepr',codepr,'codubi',codubi) r FROM public.unidad WHERE coduni=$1", [u[13]]));
+    await login(1);
+    const corregida = await corregirRelacion(String(ventaBase.codven), null, u[13]!, 1);
+    const operacion = (corregida.operaciones as Array<Record<string, unknown>>)[0]!;
+    assert.deepEqual([operacion.coduniAnterior, operacion.coduniNueva], [u[12], u[13]]);
+    assert.equal(await estadoUnidad(u[12]!), 'Disponible');
+    assert.equal(await estadoUnidad(u[13]!), 'Vendida');
+    const finanzasDespues = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('impven',impven,'prebaseven',prebaseven,'adicionalacordadoven',adicionalacordadoven) r FROM public.venta WHERE codven=$1", [ventaBase.codven]));
+    const fisicoOrigenDespues = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('codtte',codtte,'coluni',coluni,'codpro',codpro,'codepr',codepr,'codubi',codubi) r FROM public.unidad WHERE coduni=$1", [u[12]]));
+    const fisicoDestinoDespues = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('codtte',codtte,'coluni',coluni,'codpro',codpro,'codepr',codepr,'codubi',codubi) r FROM public.unidad WHERE coduni=$1", [u[13]]));
+    assert.deepEqual(finanzasDespues, finanzasAntes);
+    assert.deepEqual(fisicoOrigenDespues, fisicoOrigenAntes);
+    assert.deepEqual(fisicoDestinoDespues, fisicoDestinoAntes);
+    await login(1);
+    await cancelarVenta(String(ventaBase.codven), 'Prueba de cancelación posterior a HU-022');
+    assert.equal(await escalar('SELECT public.hu006_venta_de_unidad($1) r', [u[13]]), null);
+    const cancelacionesDestino = await escalar<Array<{ codOperacion: string }>>('SELECT public.hu021_cancelaciones_unidad($1) r', [u[13]]);
+    assert.equal(cancelacionesDestino.length, 1);
+    assert.equal((await escalar('SELECT public.hu021_cancelaciones_unidad($1) r', [u[12]]) as unknown[]).length, 0);
+    await login(3);
+    const ventaNueva = await venta(u[12]!, { decision: 'Por definir' });
+    await login(2);
+    const reasignada = await corregirRelacion(String(ventaNueva.codven), null, u[13]!, 1, 'El destino solo tenía una venta cancelada');
+    assert.equal((reasignada.operaciones as Array<Record<string, unknown>>)[0]!.coduniNueva, u[13]);
+  });
+
+  await t.test('HU-022: Gerente confirma comprador + unidad con separación Convertida y conserva su adelanto histórico', async () => {
+    await login(3);
+    await separar(u[12]!, 'Por definir');
+    const ventaBase = await venta(u[12]!, null);
+    const separacion = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('codsep',codsep::text,'codcli',codcli::text,'coduni',coduni::text,'estsep',estsep,'monadesep',monadesep) r FROM public.separacion WHERE coduni=$1", [u[12]]));
+    await login(2);
+    await assert.rejects(corregirRelacion(String(ventaBase.codven), '2', null, 1), error('PT686'));
+    await login(1);
+    const corregida = await corregirRelacion(String(ventaBase.codven), '2', null, 1, 'Cambio confirmado por gerente');
+    assert.equal((corregida.operaciones as Array<Record<string, unknown>>)[0]!.codsepVinculada, separacion.codsep);
+    const resultado = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('codcli',codcli::text,'coduni',coduni::text,'codsep',codsep::text,'impven',impven) r FROM public.venta WHERE codven=$1", [ventaBase.codven]));
+    assert.deepEqual([resultado.codcli,resultado.coduni,resultado.codsep], ['2',u[12],separacion.codsep]);
+    const separacionFinal = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('codcli',codcli::text,'coduni',coduni::text,'estsep',estsep,'monadesep',monadesep) r FROM public.separacion WHERE codsep=$1", [separacion.codsep]));
+    assert.deepEqual(separacionFinal, { codcli: '1', coduni: u[12], estsep: 'Convertida', monadesep: separacion.monadesep });
+    assert.equal(Number((await escalar<Record<string, unknown>>('SELECT public.hu006_venta_de_unidad($1) r', [u[12]])).totalRecibido), 100);
+  });
+
+  await t.test('HU-022: cambio simultáneo de comprador y unidad conserva la venta y descarta compromisos cancelados', async () => {
+    await login(3);
+    const ventaBase = await venta(u[9]!, { decision: 'Sin techo' });
+    await login(2);
+    const corregida = await corregirRelacion(String(ventaBase.codven), '3', u[10]!, 1, 'Se cruzó comprador y moto');
+    const operacion = (corregida.operaciones as Array<Record<string, unknown>>)[0]!;
+    assert.deepEqual([operacion.codcliAnterior,operacion.codcliNuevo,operacion.coduniAnterior,operacion.coduniNueva],
+      ['1','3',u[9],u[10]]);
+    assert.equal(await estadoUnidad(u[9]!), 'Disponible');
+    assert.equal(await estadoUnidad(u[10]!), 'Vendida');
+  });
+
+  await t.test('HU-022: intercambio cruzado de dos ventas es atómico, comparte evento y no libera unidades', async () => {
+    await login(3);
+    const ventaA = await venta(u[14]!, { decision: 'Por definir' });
+    const ventaB = await venta(u[15]!, { decision: 'Por definir' });
+    await propietario(async () => {
+      await db.query(`INSERT INTO public.pagoventa(codven,nropagven,codusuautorpag,montopagven,fecpagven,metpagven,
+        obspagven,ingconfpag,codusuconfpag,fecconfpag) VALUES ($1,1,3,25,$2,'Efectivo','Recepción en caja',true,3,now())`, [ventaA.codven,hoy]);
+      await db.query(`INSERT INTO public.pagoventa(codven,nropagven,codusuautorpag,montopagven,fecpagven,metpagven,
+        obspagven,ingconfpag,codusuconfpag,fecconfpag) VALUES ($1,1,3,40,$2,'Efectivo','Recepción en caja',true,3,now())`, [ventaB.codven,hoy]);
+    });
+    await login(2);
+    const previewA = await escalar<{ venta: { versionRelacion: number } }>(
+      'SELECT public.hu022_preview_correccion_venta($1) r', [ventaA.codven]);
+    const previewB = await escalar<{ venta: { versionRelacion: number } }>(
+      'SELECT public.hu022_preview_correccion_venta($1) r', [ventaB.codven]);
+    const clave = randomUUID();
+    const intercambio = await escalar<Record<string, unknown>>(
+      'SELECT public.hu022_intercambiar_ventas($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::uuid) r',
+      [ventaA.codven,null,u[15],previewA.venta.versionRelacion,ventaB.codven,null,u[14],previewB.venta.versionRelacion,'Intercambio validado',clave]);
+    const ops = intercambio.operaciones as Array<Record<string, unknown>>;
+    assert.equal(ops.length, 2);
+    assert.deepEqual(ops.map(x => [x.coduniAnterior,x.coduniNueva]), [[u[14],u[15]],[u[15],u[14]]]);
+    assert.equal(await estadoUnidad(u[14]!), 'Vendida');
+    assert.equal(await estadoUnidad(u[15]!), 'Vendida');
+    const pagos = await propietario(async () => (await db.query<{ codven: string; monto: number }>(
+      'SELECT codven::text,montopagven::float8 monto FROM public.pagoventa WHERE codven=ANY($1::bigint[]) ORDER BY codven',
+      [[ventaA.codven,ventaB.codven]])).rows);
+    assert.deepEqual(pagos, [{ codven: String(ventaA.codven), monto: 25 }, { codven: String(ventaB.codven), monto: 40 }]);
+    const replay = await escalar<Record<string, unknown>>(
+      'SELECT public.hu022_intercambiar_ventas($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::uuid) r',
+      [ventaA.codven,null,u[15],previewA.venta.versionRelacion,ventaB.codven,null,u[14],previewB.venta.versionRelacion,'Intercambio validado',clave]);
+    assert.equal(replay.reutilizada, true);
+    await assert.rejects(escalar('SELECT public.hu022_intercambiar_ventas($1,NULL,$2,2,$3,NULL,$4,2,$5,$6::uuid) r',
+      [ventaA.codven,u[15],ventaB.codven,u[14],'No es un intercambio cruzado',randomUUID()]), error('PT690'));
+    const separacionTercera = await propietario(() => escalar<string>(
+      `INSERT INTO public.separacion(coduni,codcli,codusu,metpagsep,monadesep,refsep,codusuresp,fecpagsep,
+        ingconfsep,codusuconfsep,fecconfsep,idempotenciasep,obssep)
+       VALUES ($1,1,3,'Efectivo',100,NULL,3,$2,true,3,now(),$3,'Separación sintética de conflicto') RETURNING codsep::text r`,
+      [u[14],hoy,randomUUID()]));
+    await assert.rejects(escalar('SELECT public.hu022_intercambiar_ventas($1,NULL,$2,2,$3,NULL,$4,2,$5,$6::uuid) r',
+      [ventaA.codven,u[14],ventaB.codven,u[15],'Existe un tercer compromiso',randomUUID()]), error('PT685'));
+    await propietario(() => db.query('DELETE FROM public.separacion WHERE codsep=$1', [separacionTercera]));
+    const evento = await propietario(() => escalar<{ eventos: number; detalles: number }>(
+      "SELECT jsonb_build_object('eventos',count(DISTINCT e.codcor)::int,'detalles',count(d.coddet)::int) r FROM public.hu022_correccion_relacion e JOIN public.hu022_correccion_relacion_detalle d USING(codcor) WHERE d.codven=ANY($1::bigint[])", [[ventaA.codven,ventaB.codven]]));
+    assert.deepEqual(evento, { eventos: 1, detalles: 2 });
+    const historialA = await escalar<Array<{ codcor: string; operaciones: unknown[] }>>('SELECT public.hu022_historial_venta($1) r', [ventaA.codven]);
+    const historialB = await escalar<Array<{ codcor: string; operaciones: unknown[] }>>('SELECT public.hu022_historial_venta($1) r', [ventaB.codven]);
+    assert.equal(historialA[0]?.codcor, historialB[0]?.codcor);
+    assert.equal(historialA[0]?.operaciones.length, 2);
+  });
+
+  await t.test('HU-022: una falla de auditoría revierte relación, versión y estado comercial', async () => {
+    await login(3);
+    const ventaBase = await venta(u[9]!, { decision: 'Por definir' });
+    await propietario(() => db.exec(`CREATE FUNCTION public.hu022_fallar_auditoria_test() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION USING ERRCODE='PT699', MESSAGE='Fallo sintético de auditoría'; END $$;
+      CREATE TRIGGER hu022_fallar_auditoria_test BEFORE INSERT ON public.hu022_correccion_relacion
+      FOR EACH ROW EXECUTE FUNCTION public.hu022_fallar_auditoria_test();`));
+    await login(1);
+    await assert.rejects(corregirRelacion(String(ventaBase.codven), '2', null, 1), error('PT699'));
+    const fila = await propietario(() => escalar<{ codcli: string; version: number; estado: string }>(
+      "SELECT jsonb_build_object('codcli',v.codcli::text,'version',v.hu022_versionrelacion,'estado',u.estcomuni) r FROM public.venta v JOIN public.unidad u USING(coduni) WHERE v.codven=$1", [ventaBase.codven]));
+    assert.deepEqual(fila, { codcli: '1', version: 1, estado: 'Vendida' });
+    const n = await propietario(() => escalar<number>('SELECT count(*)::int r FROM public.hu022_correccion_relacion_detalle WHERE codven=$1', [ventaBase.codven]));
+    assert.equal(n, 0);
+    await propietario(() => db.exec('DROP TRIGGER hu022_fallar_auditoria_test ON public.hu022_correccion_relacion; DROP FUNCTION public.hu022_fallar_auditoria_test()'));
+  });
+
+  await t.test('HU-022: rechaza venta destino, separación activa e incompatibilidad física', async () => {
+    const extra = unidadesHu022;
+    await login(3);
+    const comprometida = await venta(extra[0]!, { decision: 'Por definir' });
+    const fuenteVenta = await venta(extra[1]!, { decision: 'Por definir' });
+    await login(1);
+    await assert.rejects(corregirRelacion(String(fuenteVenta.codven), null, extra[0]!, 1), error('PT685'));
+    await assert.rejects(corregirRelacion(String(fuenteVenta.codven), '99999', null, 1), error('PT682'));
+    await assert.rejects(corregirRelacion(String(fuenteVenta.codven), '4', null, 1), error('PT682'));
+    await assert.rejects(corregirRelacion(String(fuenteVenta.codven), '1', null, 1), error('PT684'));
+    await cancelarVenta(String(comprometida.codven), 'Liberación de unidad de prueba');
+
+    await login(3);
+    await separar(extra[2]!, 'Por definir');
+    const ventaConUnidadFuente = await venta(extra[3]!, { decision: 'Por definir' });
+    await login(1);
+    await assert.rejects(corregirRelacion(String(ventaConUnidadFuente.codven), null, extra[2]!, 1), error('PT685'));
+
+    await propietario(async () => {
+      await db.query('UPDATE public.unidad SET codtte=$2 WHERE coduni=$1', [extra[4], tipo['Lona']]);
+      await db.query("UPDATE public.preparacionunidad SET esttecho='Instalado' WHERE coduni=$1", [extra[4]]);
+    });
+    await login(3);
+    const ventaTecho = await venta(extra[5]!, { decision: 'Sin techo' });
+    await login(1);
+    await assert.rejects(corregirRelacion(String(ventaTecho.codven), null, extra[4]!, 1), error('PT693'));
+  });
+
+  await t.test('HU-022: un destino configurado Sin techo sigue compatible con una venta Con techo', async () => {
+    const extra = unidadesHu022;
+    await propietario(async () => {
+      await db.query('UPDATE public.unidad SET codtte=$2 WHERE coduni=$1', [extra[8], tipo['Sin techo']]);
+      await db.query("UPDATE public.preparacionunidad SET esttecho='No requiere' WHERE coduni=$1", [extra[8]]);
+    });
+    await login(3);
+    const ventaTecho = await venta(extra[9]!, { decision: 'Con techo', codtte: tipo['Lona'] }, 200);
+    await login(1);
+    const resultado = await corregirRelacion(String(ventaTecho.codven), null, extra[8]!, 1, 'Destino sin techo configurado');
+    assert.equal((resultado.operaciones as Array<Record<string, unknown>>)[0]!.coduniNueva, extra[8]);
+    assert.equal((await escalar<Record<string, unknown>>('SELECT public.hu006_venta_de_unidad($1) r', [extra[8]])).codven, String(ventaTecho.codven));
+    assert.equal(await estadoUnidad(extra[9]!), 'Disponible');
+  });
+
+  await t.test('HU-022: falla en la segunda actualización del intercambio revierte ambas ventas y el evento', async () => {
+    const extra = unidadesHu022;
+    await login(3);
+    const ventaA = await venta(extra[6]!, { decision: 'Por definir' });
+    const ventaB = await venta(extra[7]!, { decision: 'Por definir' });
+    await propietario(() => db.exec(`CREATE FUNCTION public.hu022_fallar_segunda_venta_test() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.codven = ${ventaB.codven} THEN RAISE EXCEPTION USING ERRCODE='PT699', MESSAGE='Fallo sintético de segunda operación'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER hu022_fallar_segunda_venta_test BEFORE UPDATE OF coduni ON public.venta
+      FOR EACH ROW EXECUTE FUNCTION public.hu022_fallar_segunda_venta_test();`));
+    await login(1);
+    await assert.rejects(escalar('SELECT public.hu022_intercambiar_ventas($1,NULL,$2,1,$3,NULL,$4,1,$5,$6::uuid) r',
+      [ventaA.codven,extra[7],ventaB.codven,extra[6],'Fallo segunda actualización',randomUUID()]), error('PT699'));
+    const relaciones = await propietario(async () => (await db.query<{ codven: string; coduni: string }>(
+      'SELECT codven::text,coduni::text FROM public.venta WHERE codven=ANY($1::bigint[]) ORDER BY codven', [[ventaA.codven,ventaB.codven]])).rows);
+    assert.deepEqual(relaciones, [{ codven: String(ventaA.codven), coduni: extra[6] }, { codven: String(ventaB.codven), coduni: extra[7] }]);
+    assert.equal(await estadoUnidad(extra[6]!), 'Vendida');
+    assert.equal(await estadoUnidad(extra[7]!), 'Vendida');
+    const eventos = await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu022_correccion_relacion_detalle WHERE codven=ANY($1::bigint[])', [[ventaA.codven,ventaB.codven]]));
+    assert.equal(eventos, 0);
+    await propietario(() => db.exec('DROP TRIGGER hu022_fallar_segunda_venta_test ON public.venta; DROP FUNCTION public.hu022_fallar_segunda_venta_test()'));
+  });
+
+  await t.test('HU-022: no libera la unidad anterior mientras conserva un movimiento HU-003 en tránsito', async () => {
+    const extra = unidadesHu022;
+    await login(3);
+    const ventaBase = await venta(extra[10]!, { decision: 'Por definir' });
+    const ubicacionesMovimiento = await propietario(async () => (await db.query<{ codubi: string; nomubi: string }>(
+      "SELECT codubi::text,nomubi FROM public.ubicacion WHERE nomubi IN ('Comas','Ventanilla')")).rows);
+    const codubiOrigen = ubicacionesMovimiento.find(x => x.nomubi === 'Comas')!.codubi;
+    const codubiDestino = ubicacionesMovimiento.find(x => x.nomubi === 'Ventanilla')!.codubi;
+    await propietario(() => db.query('UPDATE public.unidad SET codubi=$2 WHERE coduni=$1', [extra[10], codubiOrigen]));
+    await login(1);
+    const codmub = await escalar<string>(
+      "SELECT (public.hu003_iniciar_movimiento($1,$2,$3,'Traslado vigente durante la corrección')->>'codmub') r",
+      [extra[10], codubiOrigen, codubiDestino]);
+    const movimientoAntes = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('coduni',coduni::text,'codubiori',codubiori::text,'codubides',codubides::text,'estado',estmub) r FROM public.movimientoubicacion WHERE codmub=$1",
+      [codmub]));
+
+    const corregida = await corregirRelacion(String(ventaBase.codven), null, extra[11]!, 1, 'La unidad anterior mantiene un traslado activo');
+    const operacion = (corregida.operaciones as Array<Record<string, unknown>>)[0]!;
+    assert.equal(operacion.estadoUnidadOrigenResultante, 'No disponible');
+    assert.equal(await estadoUnidad(extra[10]!), 'No disponible');
+    assert.equal(await estadoUnidad(extra[11]!), 'Vendida');
+    const movimientoDespues = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('coduni',coduni::text,'codubiori',codubiori::text,'codubides',codubides::text,'estado',estmub) r FROM public.movimientoubicacion WHERE codmub=$1",
+      [codmub]));
+    assert.deepEqual(movimientoDespues, movimientoAntes);
+    assert.equal(await propietario(() => escalar<string>('SELECT codubi::text r FROM public.unidad WHERE coduni=$1', [extra[10]])), codubiOrigen);
   });
 });

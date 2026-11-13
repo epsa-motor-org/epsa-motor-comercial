@@ -31,6 +31,21 @@ export function responderErrorVenta(res: Response, error: unknown) {
     PT621: [422, 'Los pagos recibidos superan el total recalculado de la venta'],
     PT622: [400, 'Los parámetros de búsqueda de ventas no son válidos'],
     PT623: [409, 'La venta está cancelada y ya no se puede modificar'],
+    PT680: [404, 'No se encontró la venta solicitada'],
+    PT681: [400, 'Los datos de la corrección no son válidos'],
+    PT682: [422, 'El comprador destino no existe o está inactivo'],
+    PT683: [409, 'La relación cambió desde la consulta; actualiza la información e inténtalo de nuevo'],
+    PT684: [409, 'La corrección no cambia la relación actual'],
+    PT685: [409, 'La unidad destino tiene un compromiso vigente o no está disponible'],
+    PT686: [403, 'El cambio de comprador con dinero o comprobante requiere revisión y confirmación de Gerente'],
+    PT687: [409, 'Idempotency-Key ya fue usada con otra corrección'],
+    PT688: [409, 'La unidad destino no es compatible con el precio base pactado'],
+    PT689: [409, 'Solo se pueden corregir ventas Registradas'],
+    PT690: [409, 'El intercambio debe involucrar exactamente dos ventas y sus dos unidades'],
+    PT691: [422, 'La unidad destino no tiene una identificación válida'],
+    PT692: [409, 'La separación antecedente no está convertida y debe revisarse antes de corregir'],
+    PT438: [409, 'La unidad destino tiene un techo instalado incompatible con el acuerdo de la venta'],
+    PT693: [409, 'La configuración de techo de la unidad destino contradice el acuerdo de la venta'],
     '23503': [404, 'No se encontró una unidad, comprador, responsable o sede'],
     '23505': [409, 'La unidad o la solicitud ya fue registrada'],
     '23514': [422, 'Los datos de venta o pago no cumplen las reglas permitidas'],
@@ -43,4 +58,11 @@ export function responderErrorVenta(res: Response, error: unknown) {
   const codigo = (error as ErrorVentaBD | null)?.code ?? '';
   const [status, message] = errores[codigo] ?? [500, 'Error interno al procesar la venta'];
   return res.status(status).json({ ok: false, message });
+}
+
+export function responderErrorCorreccionVenta(res: Response, error: unknown) {
+  const codigo = (error as ErrorVentaBD | null)?.code ?? '';
+  if (codigo === '42501')
+    return res.status(403).json({ ok: false, message: 'Solo gerente y administradora pueden corregir relaciones de venta' });
+  return responderErrorVenta(res, error);
 }
