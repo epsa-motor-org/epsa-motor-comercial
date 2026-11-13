@@ -99,6 +99,38 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
   };
   const asegurarEvidenciaVenta = (coduni: string, ruta: string) => propietario(() => db.query(
     "INSERT INTO storage.objects(bucket_id,name,owner) VALUES ('ventas-evidencia',$1,auth.uid())", [ruta]));
+  let correlativoUnidadHU021 = 0;
+  const crearUnidadHU021 = async (): Promise<string> => propietario(async () => {
+    const correlativo = ++correlativoUnidadHU021;
+    const compraNueva = await escalar<string>(
+      "INSERT INTO public.compra(codmod,codusu,colcom,cancom) VALUES (1,1,'Azul',1) RETURNING codcom::text r"
+    );
+    await db.query(`INSERT INTO public.factura_compra(codcom,emisor,numero,fecha_emision,cantidad_motos,codusu)
+      VALUES ($1,'QA','HU021-FAC-${correlativo}','2026-11-12',1,1)`, [compraNueva]);
+    return escalar<string>(`INSERT INTO public.unidad(codcom,codmod,nummotuni,chauni,coluni)
+      VALUES ($1,1,$2,$3,'Azul') RETURNING coduni::text r`,
+      [compraNueva, `HU021-MOTOR-${correlativo}`, `HU021-CHASIS-${correlativo}`]);
+  });
+  const cancelarSeparacion = (codsep: string, motivo: string, observacion: string | null, clave = claveNueva()) =>
+    escalar<Record<string, unknown>>('SELECT public.hu021_cancelar_separacion($1,$2,$3,$4::uuid) r',
+      [codsep, motivo, observacion, clave]);
+  const cancelarVentaHU021 = (codven: string, motivo: string, observacion: string | null, clave = claveNueva()) =>
+    escalar<Record<string, unknown>>('SELECT public.hu021_cancelar_venta($1,$2,$3,$4::uuid) r',
+      [codven, motivo, observacion, clave]);
+  const crearTransferenciaSeparacion = async (coduni: string, responsable = 3) => {
+    const ruta = `separaciones/${coduni}/hu021-voucher.pdf`;
+    await propietario(() => db.query(
+      "INSERT INTO storage.objects(bucket_id,name,owner) VALUES ('separaciones-evidencia',$1,$2)", [ruta, UUIDS[2]]));
+    return escalar<{ codsep: string; estado: string }>(
+      'SELECT public.hu005_crear_separacion($1,1,$2,1,100,\'2026-11-12\',\'Transferencia\',\'OP-HU021\',$3,\'Adelanto recibido\',true,$4::uuid,\'Por definir\',NULL) r',
+      [coduni, responsable, ruta, claveNueva()]);
+  };
+  const crearSeparacionHU021 = async (coduni: string, responsable = 3) => {
+    const resultado = await escalar<{ codsep: string }>(
+      'SELECT public.hu005_crear_separacion($1,1,$2,NULL,100,\'2026-11-12\',\'Efectivo\',NULL,NULL,\'Recepción en caja\',true,$3::uuid,\'Por definir\',NULL) r',
+      [coduni, responsable, claveNueva()]);
+    return resultado.codsep;
+  };
 
   await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE SCHEMA auth; CREATE SCHEMA storage;
     CREATE TABLE auth.users(id uuid PRIMARY KEY);
@@ -201,6 +233,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       WHERE nomtte IN ('Sin techo QA','Lona QA','Techo inactivo QA','Fibra distinta QA')`);
     await db.exec(leer('supabase/migrations/202611120002_hu006_listar_ventas.sql'));
     await db.exec(leer('supabase/migrations/202611120003_hu005_adelanto_minimo.sql'));
+    await db.exec(leer('supabase/migrations/202611120004_hu021_cancelaciones.sql'));
   });
 
   const tipos = await propietario(async () => (await db.query<{ codtte: string }>(
@@ -708,5 +741,376 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     const rechazo = resultados.find(resultado => resultado.status === 'rejected') as PromiseRejectedResult;
     assert.ok(['PT604', '23505'].includes((rechazo.reason as ErrorSQL).code ?? ''));
     assert.equal(await propietario(() => escalar<number>('SELECT count(*)::int r FROM venta WHERE coduni=$1', [unidad])), 1);
+  });
+
+  await t.test('HU-021 Gerente/Administradora cancelan; vendedor solo si es responsable comercial actual', async () => {
+    const gerenteUnidad = await crearUnidadHU021();
+    await login(3);
+    const sepGerente = await crearSeparacionHU021(gerenteUnidad);
+    await login(1);
+    const porGerente = await cancelarSeparacion(sepGerente, 'Comprador desistió', 'Adelanto se conserva');
+    assert.equal(porGerente.estado, 'Cancelada');
+    assert.equal(porGerente.cancelador, '1');
+
+    const adminUnidad = await crearUnidadHU021();
+    await login(3);
+    const sepAdmin = await crearSeparacionHU021(adminUnidad);
+    await login(2);
+    assert.equal((await cancelarSeparacion(sepAdmin, 'Solicitud de anulación', 'Adelanto retenido')).estado, 'Cancelada');
+
+    const autorUnidad = await crearUnidadHU021();
+    await login(3);
+    const sepAutor = await crearSeparacionHU021(autorUnidad, 3);
+    await propietario(() => db.query('UPDATE public.separacion SET codusuresp=6 WHERE codsep=$1', [sepAutor]));
+    await assert.rejects(cancelarSeparacion(sepAutor, 'Autor no vigente', 'No devolver hasta conciliar'), error('PT652'));
+    await login(6);
+    const claveSep = claveNueva();
+    assert.equal((await cancelarSeparacion(sepAutor, 'Responsable reasignado', 'No devolver hasta conciliar', claveSep)).estado, 'Cancelada');
+    await propietario(() => db.query('UPDATE public.separacion SET codusuresp=3 WHERE codsep=$1', [sepAutor]));
+    await assert.rejects(cancelarSeparacion(sepAutor, 'Responsable reasignado', 'No devolver hasta conciliar', claveSep), error('PT652'),
+      'el replay también verifica el responsable vigente después del lock');
+
+    const responsableUnidad = await crearUnidadHU021();
+    await login(1);
+    const sepResponsable = await crearSeparacionHU021(responsableUnidad, 3);
+    await login(3);
+    assert.equal((await cancelarSeparacion(sepResponsable, 'Responsable asignado', 'Adelanto observado')).estado, 'Cancelada');
+  });
+
+  await t.test('HU-021 vendedor ajeno y auxiliar no cancelan; separación Convertida no se cancela aisladamente', async () => {
+    const unidadAjena = await crearUnidadHU021();
+    await login(1);
+    const separacionAjena = await crearSeparacionHU021(unidadAjena, 2);
+    await login(3);
+    await assert.rejects(cancelarSeparacion(separacionAjena, 'Intento ajeno', 'Observación'), error('PT652'));
+    const antes = await propietario(() => escalar<{ estado: string; comercial: string }>(
+      `SELECT jsonb_build_object('estado',s.estsep,'comercial',u.estcomuni) r
+       FROM public.separacion s JOIN public.unidad u USING(coduni) WHERE s.codsep=$1`, [separacionAjena]));
+    assert.deepEqual(antes, { estado: 'Activa', comercial: 'Separada' });
+    await login(4);
+    await assert.rejects(cancelarSeparacion(separacionAjena, 'Sin permiso', 'Observación'), error('42501'));
+
+    const unidadConvertida = await crearUnidadHU021();
+    await login(3);
+    const codsep = await crearSeparacionHU021(unidadConvertida);
+    const venta = await crearVenta(unidadConvertida, { clave: claveNueva() });
+    await assert.rejects(cancelarSeparacion(codsep, 'No aplica', 'Adelanto se mantiene'), error('PT653'));
+    const estados = await propietario(() => escalar<{ sep: string; ven: string; eventos: number }>(
+      `SELECT jsonb_build_object('sep',(SELECT estsep FROM public.separacion WHERE codsep=$1),
+        'ven',(SELECT estven FROM public.venta WHERE codven=$2),
+        'eventos',(SELECT count(*)::int FROM public.historialcancelacion WHERE codsep=$1)) r`, [codsep, venta.codven]));
+    assert.deepEqual(estados, { sep: 'Convertida', ven: 'Registrada', eventos: 0 });
+  });
+
+  await t.test('HU-021 separación conserva adelanto/evidencia y no cambia ubicación, techo, preparación ni proveedor', async () => {
+    const unidad = await crearUnidadHU021();
+    const tipo = await propietario(() => escalar<string>(
+      "SELECT codtte::text r FROM public.tipotecho WHERE nomtte='Lona QA'"));
+    await login(1);
+    await propietario(async () => {
+      await db.query('UPDATE public.unidad SET codubi=1,codtte=$1,codpro=1,dettecuni=$2 WHERE coduni=$3',
+        [tipo, 'Configuración física preservada', unidad]);
+      await db.query("UPDATE public.preparacionunidad SET estarmado='Terminado',esttecho='Instalado' WHERE coduni=$1", [unidad]);
+    });
+    await login(3);
+    const separacion = await crearTransferenciaSeparacion(unidad);
+    const fisicoAntes = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('codubi',u.codubi,'codtte',u.codtte,'codpro',u.codpro,
+        'detalle',u.dettecuni,'armado',p.estarmado,'techo',p.esttecho,'version',p.versionprep) r
+       FROM public.unidad u JOIN public.preparacionunidad p USING(coduni) WHERE u.coduni=$1`, [unidad]));
+    await assert.rejects(cancelarSeparacion(separacion.codsep, 'Comprador desistió', null), error('PT656'));
+    const salida = await cancelarSeparacion(separacion.codsep, 'Comprador desistió', 'Adelanto queda pendiente de conciliación');
+    assert.equal((salida.finanzasConservadas as Record<string, unknown>).adelanto, 100);
+    assert.equal((salida.finanzasConservadas as Record<string, unknown>).evidenciaConservada, true);
+    const conservacion = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('físico',jsonb_build_object('codubi',u.codubi,'codtte',u.codtte,'codpro',u.codpro,
+        'detalle',u.dettecuni,'armado',p.estarmado,'techo',p.esttecho,'version',p.versionprep),
+        'estado',s.estsep,'monto',s.monadesep,'evidencia',s.rutavouchersep,'referencia',s.refsep,
+        'medio',s.metpagsep,'observacion',s.obssep) r
+       FROM public.unidad u JOIN public.preparacionunidad p USING(coduni)
+       JOIN public.separacion s USING(coduni) WHERE u.coduni=$1 AND s.codsep=$2`, [unidad, separacion.codsep]));
+    assert.deepEqual(conservacion.físico, fisicoAntes);
+    assert.deepEqual([conservacion.estado, conservacion.monto, conservacion.evidencia,
+      conservacion.referencia, conservacion.medio, conservacion.observacion],
+      ['Cancelada', 100, `separaciones/${unidad}/hu021-voucher.pdf`, 'OP-HU021', 'Transferencia', 'Adelanto recibido']);
+  });
+
+  await t.test('HU-021 venta conserva pagos, adelanto y separación Convertida, exige observación financiera y no altera datos físicos', async () => {
+    const unidad = await crearUnidadHU021();
+    const codtte = await propietario(() => escalar<string>("SELECT codtte::text r FROM public.tipotecho WHERE nomtte='Lona QA'"));
+    await login(1);
+    await propietario(async () => {
+      await db.query('UPDATE public.unidad SET codubi=2,codtte=$1,codpro=1,dettecuni=$2 WHERE coduni=$3',
+        [codtte, 'Ajuste de techo conservado', unidad]);
+      await db.query("UPDATE public.preparacionunidad SET estarmado='Terminado',esttecho='Instalado' WHERE coduni=$1", [unidad]);
+    });
+    await login(3);
+    const codsep = await crearSeparacionHU021(unidad);
+    const venta = await crearVenta(unidad, { pagos: [{ monto: 150, fecha: '2026-11-12', medioPago: 'Efectivo',
+      referencia: null, rutaEvidencia: null, observacion: 'Pago en caja', ingresoConfirmado: true, codusuConfirmador: null }] });
+    const fisicoAntes = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('codubi',u.codubi,'codtte',u.codtte,'codpro',u.codpro,
+        'detalle',u.dettecuni,'armado',p.estarmado,'techo',p.esttecho,'version',p.versionprep) r
+       FROM public.unidad u JOIN public.preparacionunidad p USING(coduni) WHERE u.coduni=$1`, [unidad]));
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Comprador desistió', null), error('PT656'));
+    const cancelada = await cancelarVentaHU021(venta.codven, 'Comprador desistió', 'Mantener saldo para conciliación');
+    assert.equal(cancelada.estado, 'Cancelada');
+    assert.equal(cancelada.estadoComercialUnidad, 'Disponible');
+    assert.deepEqual(cancelada.finanzasConservadas, {
+      importe: 10000, adelantoSeparacion: 100, pagosVenta: 150, cantidadPagos: 1,
+      totalRecibido: 250, saldo: 9750, comprobanteExternoConservado: false,
+      estadoSeparacionVinculada: 'Convertida'
+    });
+    const estado = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('venta',v.estven,'feccancelacion',v.feccanven IS NOT NULL,
+        'motivo',v.motcanven,'cancelador',v.codusucanven::text,'obsdinero',v.obscancelaciondinero,
+        'pagos',(SELECT count(*)::int FROM public.pagoventa p WHERE p.codven=v.codven),
+        'separacion',s.estsep,'adelanto',s.monadesep,'comprobante',v.refcompven,
+        'comercial',u.estcomuni,'físico',jsonb_build_object('codubi',u.codubi,'codtte',u.codtte,
+          'codpro',u.codpro,'detalle',u.dettecuni,'armado',p.estarmado,'techo',p.esttecho,'version',p.versionprep)) r
+       FROM public.venta v JOIN public.separacion s ON s.codsep=v.codsep
+       JOIN public.unidad u ON u.coduni=v.coduni JOIN public.preparacionunidad p ON p.coduni=u.coduni
+       WHERE v.codven=$1`, [venta.codven]));
+    assert.deepEqual(estado.físico, fisicoAntes);
+    assert.deepEqual([estado.venta, estado.feccancelacion, estado.motivo, estado.cancelador,
+      estado.obsdinero, estado.pagos, estado.separacion, estado.adelanto, estado.comprobante, estado.comercial],
+      ['Cancelada', true, 'Comprador desistió', '3', 'Mantener saldo para conciliación', 1,
+        'Convertida', 100, null, 'Disponible']);
+  });
+
+  await t.test('HU-021 Gerente/Admin cancelan; vendedor autor requiere ser el responsable comercial actual', async () => {
+    const autorUnidad = await crearUnidadHU021();
+    await login(3);
+    const ventaAutor = await crearVenta(autorUnidad, { responsable: 3, clave: claveNueva() });
+    await propietario(() => db.query('UPDATE public.venta SET codusuresp=6 WHERE codven=$1', [ventaAutor.codven]));
+    await assert.rejects(cancelarVentaHU021(ventaAutor.codven, 'Autor ya no asignado', null), error('PT652'));
+    await login(6);
+    const claveVenta = claveNueva();
+    assert.equal((await cancelarVentaHU021(ventaAutor.codven, 'Responsable reasignado', null, claveVenta)).estado, 'Cancelada');
+    await propietario(() => db.query('UPDATE public.venta SET codusuresp=3 WHERE codven=$1', [ventaAutor.codven]));
+    await assert.rejects(cancelarVentaHU021(ventaAutor.codven, 'Responsable reasignado', null, claveVenta), error('PT652'),
+      'el replay también verifica el responsable vigente después del lock');
+
+    const responsableUnidad = await crearUnidadHU021();
+    await login(1);
+    const ventaResponsable = await crearVenta(responsableUnidad, { responsable: 3, clave: claveNueva() });
+    await login(3);
+    assert.equal((await cancelarVentaHU021(ventaResponsable.codven, 'Responsable asignado', null)).estado, 'Cancelada');
+
+    const gerenteUnidad = await crearUnidadHU021();
+    await login(3);
+    const ventaGerente = await crearVenta(gerenteUnidad, { clave: claveNueva() });
+    await login(1);
+    assert.equal((await cancelarVentaHU021(ventaGerente.codven, 'Revisión de gerente', null)).cancelador, '1');
+
+    const adminUnidad = await crearUnidadHU021();
+    await login(3);
+    const ventaAdmin = await crearVenta(adminUnidad, { clave: claveNueva() });
+    await login(2);
+    assert.equal((await cancelarVentaHU021(ventaAdmin.codven, 'Revisión administrativa', null)).cancelador, '2');
+
+    const ajenaUnidad = await crearUnidadHU021();
+    await login(1);
+    const ventaAjena = await crearVenta(ajenaUnidad, { responsable: 2, clave: claveNueva() });
+    await login(3);
+    await assert.rejects(cancelarVentaHU021(ventaAjena.codven, 'Intento ajeno', null), error('PT652'));
+    assert.equal(await propietario(() => escalar<string>('SELECT estven r FROM public.venta WHERE codven=$1', [ventaAjena.codven])), 'Registrada');
+  });
+
+  await t.test('HU-021 venta histórica sin codusuresp no autoriza vendedores; Gerente y Administradora conservan acceso', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(3);
+    const venta = await crearVenta(unidad, { responsable: 3, clave: claveNueva() });
+    await propietario(() => db.query(`UPDATE public.venta SET codusuresp=NULL,
+      idempotenciaven=NULL,payloadidempotenciaven=NULL WHERE codven=$1`, [venta.codven]));
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Autor sin asignación vigente', null), error('PT652'));
+    await login(6);
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Otro vendedor sin asignación', null), error('PT652'));
+    await login(1);
+    assert.equal((await cancelarVentaHU021(venta.codven, 'Cancelación por gerente', null)).estado, 'Cancelada');
+
+    const unidadAdmin = await crearUnidadHU021();
+    await login(3);
+    const ventaAdmin = await crearVenta(unidadAdmin, { responsable: 3, clave: claveNueva() });
+    await propietario(() => db.query(`UPDATE public.venta SET codusuresp=NULL,
+      idempotenciaven=NULL,payloadidempotenciaven=NULL WHERE codven=$1`, [ventaAdmin.codven]));
+    await login(2);
+    const cancelacionAdmin = await cancelarVentaHU021(ventaAdmin.codven, 'Cancelación por administradora', null);
+    assert.equal(cancelacionAdmin.estado, 'Cancelada');
+    assert.equal(cancelacionAdmin.cancelador, '2');
+
+    const nulabilidad = await propietario(() => escalar<string>(
+      `SELECT is_nullable r FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='separacion' AND column_name='codusuresp'`));
+    assert.equal(nulabilidad, 'NO', 'separacion.codusuresp permanece NOT NULL según la migration HU-005 aplicada');
+  });
+
+  await t.test('HU-021 venta conserva pago con voucher, comprobante externo y comprobante financiero', async () => {
+    const unidad = await crearUnidadHU021();
+    const ruta = `ventas/${unidad}/hu021-transferencia.pdf`;
+    await login(3);
+    await asegurarEvidenciaVenta(unidad, ruta);
+    const venta = await crearVenta(unidad, {
+      pagos: [{ monto: 125, fecha: '2026-11-12', medioPago: 'Transferencia', referencia: 'OP-HU021-VENTA',
+        rutaEvidencia: ruta, observacion: 'Ingreso confirmado por gerente', ingresoConfirmado: true, codusuConfirmador: 1 }],
+      refcomp: 'F001-HU021', feccomp: '2026-11-12'
+    });
+    const resultado = await cancelarVentaHU021(venta.codven, 'Venta duplicada en sistema externo', 'Pago queda pendiente de conciliación');
+    assert.equal((resultado.finanzasConservadas as Record<string, unknown>).comprobanteExternoConservado, true);
+    const conservado = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('estado',v.estven,'referencia',v.refcompven,'fechaComprobante',v.feccompven,
+        'pagos',(SELECT count(*)::int FROM public.pagoventa p WHERE p.codven=v.codven),
+        'ruta',(SELECT p.rutavoucherven FROM public.pagoventa p WHERE p.codven=v.codven),
+        'referenciaPago',(SELECT p.refpagven FROM public.pagoventa p WHERE p.codven=v.codven)) r
+       FROM public.venta v WHERE v.codven=$1`, [venta.codven]));
+    assert.deepEqual(conservado, { estado: 'Cancelada', referencia: 'F001-HU021', fechaComprobante: '2026-11-12',
+      pagos: 1, ruta, referenciaPago: 'OP-HU021-VENTA' });
+  });
+
+  await t.test('HU-021 replay de venta con la misma key no agrega otro evento y una segunda cancelación entra en conflicto', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(3);
+    const venta = await crearVenta(unidad, { clave: claveNueva() });
+    const key = claveNueva();
+    const primera = await cancelarVentaHU021(venta.codven, 'Corrección comercial', null, key);
+    assert.equal(primera.reutilizada, false);
+    assert.equal((await cancelarVentaHU021(venta.codven, 'Corrección comercial', null, key)).reutilizada, true);
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Motivo diferente', null, key), error('PT658'));
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Corrección comercial', null, claveNueva()), error('PT654'));
+    const lectura = await escalar<Record<string, unknown>>(
+      'SELECT public.hu021_consultar_cancelacion_venta($1) r', [venta.codven]);
+    assert.equal(lectura.tipoOperacion, 'Venta');
+    assert.equal(lectura.codOperacion, venta.codven);
+    assert.equal(lectura.estadoAnterior, 'Registrada');
+    assert.equal(lectura.estadoResultante, 'Cancelada');
+    assert.ok(!('payload' in lectura) && !('resultado' in lectura));
+    assert.equal(await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.historialcancelacion WHERE codven=$1', [venta.codven])), 1);
+  });
+
+  await t.test('HU-021 replay con misma key no duplica log; payload distinto y segunda cancelación entran en conflicto', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(3);
+    const codsep = await crearSeparacionHU021(unidad);
+    const key = claveNueva();
+    const argumentos = [codsep, 'Solicitud cancelada', 'Adelanto retenido', key] as const;
+    const primera = await cancelarSeparacion(...argumentos);
+    const replay = await cancelarSeparacion(...argumentos);
+    assert.equal(primera.reutilizada, false);
+    assert.equal(replay.reutilizada, true);
+    await assert.rejects(cancelarSeparacion(codsep, 'Solicitud distinta', 'Adelanto retenido', key), error('PT658'));
+    await assert.rejects(cancelarSeparacion(codsep, 'Solicitud cancelada', 'Adelanto retenido', claveNueva()), error('PT659'));
+    const auditoria = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('cantidad',(SELECT count(*)::int FROM public.historialcancelacion WHERE codsep=$1),
+        'tipo',h.tipoperacion,'accion',h.accion,'actor',h.codusu::text,'motivo',h.motivo,
+        'observacion',h.observaciondinero,'anterior',h.estadoanterior,'resultado',h.estadoresultante,
+        'comercial',h.estcomuniresultante,'fecha',h.fecaccion IS NOT NULL) r
+       FROM public.historialcancelacion h WHERE h.codsep=$1`, [codsep]));
+    assert.deepEqual(auditoria, { cantidad: 1, tipo: 'Separacion', accion: 'Cancelacion', actor: '3',
+      motivo: 'Solicitud cancelada', observacion: 'Adelanto retenido', anterior: 'Activa',
+      resultado: 'Cancelada', comercial: 'Disponible', fecha: true });
+    const lectura = await escalar<Record<string, unknown>>(
+      'SELECT public.hu021_consultar_cancelacion_separacion($1) r', [codsep]);
+    assert.deepEqual(lectura, {
+      tipoOperacion: 'Separacion', codOperacion: codsep, accion: 'Cancelacion',
+      actor: { codusu: '3', nombre: 'Vendedor QA' },
+      fecha: lectura.fecha, motivo: 'Solicitud cancelada', observacionFinanciera: 'Adelanto retenido',
+      estadoAnterior: 'Activa', estadoResultante: 'Cancelada', estadoComercialResultante: 'Disponible'
+    });
+    assert.ok(!('payload' in lectura) && !('resultado' in lectura));
+    await login(6);
+    await assert.rejects(escalar('SELECT public.hu021_consultar_cancelacion_separacion($1) r', [codsep]), error('42501'));
+    await login(3);
+    await assert.rejects(db.query('SELECT * FROM public.historialcancelacion'), error('42501'));
+  });
+
+  await t.test('HU-021 doble solicitud local con la misma key genera una sola cancelación y un solo evento', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(3);
+    const codsep = await crearSeparacionHU021(unidad);
+    const key = claveNueva();
+    // PGlite usa una conexión compartida; esto comprueba replay y resultado de negocio,
+    // no reemplaza una prueba de bloqueo con dos sesiones PostgreSQL independientes.
+    const resultados = await Promise.all([
+      cancelarSeparacion(codsep, 'Prueba de doble solicitud', 'Adelanto conservado', key),
+      cancelarSeparacion(codsep, 'Prueba de doble solicitud', 'Adelanto conservado', key)
+    ]);
+    assert.deepEqual(resultados.map(resultado => resultado.reutilizada).sort(), [false, true]);
+    assert.equal(await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.historialcancelacion WHERE codsep=$1', [codsep])), 1);
+  });
+
+  await t.test('HU-021 un fallo al insertar auditoría revierte estado comercial y cancelación', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(3);
+    const codsep = await crearSeparacionHU021(unidad);
+    await propietario(() => db.exec(`CREATE FUNCTION public.hu021_test_rechazar_log() RETURNS trigger
+      LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fallo QA al escribir log'; END $$;
+      CREATE TRIGGER hu021_test_rechazar_log BEFORE INSERT ON public.historialcancelacion
+      FOR EACH ROW EXECUTE FUNCTION public.hu021_test_rechazar_log()`));
+    await assert.rejects(cancelarSeparacion(codsep, 'Debe revertirse', 'Adelanto conservado'));
+    await propietario(async () => {
+      await db.exec('DROP TRIGGER hu021_test_rechazar_log ON public.historialcancelacion; DROP FUNCTION public.hu021_test_rechazar_log()');
+      const estado = await escalar<{ sep: string; comercial: string; eventos: number }>(
+        `SELECT jsonb_build_object('sep',s.estsep,'comercial',u.estcomuni,
+          'eventos',(SELECT count(*)::int FROM public.historialcancelacion WHERE codsep=s.codsep)) r
+         FROM public.separacion s JOIN public.unidad u USING(coduni) WHERE s.codsep=$1`, [codsep]);
+      assert.deepEqual(estado, { sep: 'Activa', comercial: 'Separada', eventos: 0 });
+    });
+  });
+
+  await t.test('HU-021 venta Cancelada deja liberar la unidad y crear una nueva venta; venta vigente sigue bloqueando', async () => {
+    const unidadReventa = await crearUnidadHU021();
+    await login(3);
+    const ventaAnterior = await crearVenta(unidadReventa, { clave: claveNueva() });
+    const cancelada = await cancelarVentaHU021(ventaAnterior.codven, 'Error de registro', null);
+    assert.equal(cancelada.unidadLiberada, true);
+    assert.equal(await escalar<unknown | null>('SELECT public.hu006_venta_de_unidad($1) r', [unidadReventa]), null,
+      'si solo hay ventas canceladas, la consulta de venta vigente devuelve null');
+    const ventaNueva = await crearVenta(unidadReventa, { clave: claveNueva() });
+    assert.notEqual(ventaNueva.codven, ventaAnterior.codven);
+    const ventaVigente = await escalar<{ codven: string; estado: string }>(
+      `SELECT jsonb_build_object('codven',r->>'codven','estado',r->>'estado') r
+       FROM (SELECT public.hu006_venta_de_unidad($1) r) consulta`, [unidadReventa]);
+    assert.deepEqual(ventaVigente, { codven: ventaNueva.codven, estado: 'Registrada' },
+      'con una venta cancelada anterior y otra registrada, solo se proyecta la actual');
+    const filas = await propietario(() => escalar<{ cantidad: number; estados: string[] }>(
+      `SELECT jsonb_build_object('cantidad',count(*)::int,'estados',array_agg(estven ORDER BY codven)) r
+       FROM public.venta WHERE coduni=$1`, [unidadReventa]));
+    assert.deepEqual(filas, { cantidad: 2, estados: ['Cancelada', 'Registrada'] });
+    await assert.rejects(crearVenta(unidadReventa, { clave: claveNueva() }), error('PT604'));
+    await assert.rejects(crearSeparacionHU021(unidadReventa), error('PT430'));
+
+    const unidadSeparacion = await crearUnidadHU021();
+    const venta = await crearVenta(unidadSeparacion, { clave: claveNueva() });
+    await cancelarVentaHU021(venta.codven, 'Liberar para separar', null);
+    const sep = await crearSeparacionHU021(unidadSeparacion);
+    assert.ok(Number(sep) > 0);
+    const estadoUnidad = await propietario(() => escalar<string>(
+      'SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [unidadSeparacion]));
+    assert.equal(estadoUnidad, 'Separada');
+  });
+
+  await t.test('HU-021 no libera la unidad si permanece otra separación activa', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(3);
+    const codsep = await crearSeparacionHU021(unidad);
+    const codven = await propietario(async () => {
+      const resultado = await db.query<{ codven: string }>(`INSERT INTO public.venta(
+        coduni,codcli,codusu,fecven,modcomven,estven
+      ) VALUES ($1,1,1,CURRENT_TIMESTAMP,'Contado','Registrada') RETURNING codven::text`, [unidad]);
+      await db.query("UPDATE public.unidad SET estcomuni='Vendida' WHERE coduni=$1", [unidad]);
+      return resultado.rows[0]!.codven;
+    });
+    await login(1);
+    const resultado = await cancelarVentaHU021(codven, 'Conflicto de datos conciliado', null);
+    assert.equal(resultado.unidadLiberada, false);
+    assert.equal(resultado.estadoComercialUnidad, 'Separada');
+    const estado = await propietario(() => escalar<{ venta: string; separacion: string; unidad: string }>(
+      `SELECT jsonb_build_object('venta',v.estven,'separacion',s.estsep,'unidad',u.estcomuni) r
+       FROM public.venta v JOIN public.unidad u ON u.coduni=v.coduni
+       JOIN public.separacion s ON s.coduni=u.coduni AND s.estsep='Activa' WHERE v.codven=$1`, [codven]));
+    assert.deepEqual(estado, { venta: 'Cancelada', separacion: 'Activa', unidad: 'Separada' });
+    assert.ok(Number(codsep) > 0);
   });
 });
