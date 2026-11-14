@@ -116,6 +116,7 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   // HU-022 con la regla del techo instalado e historial con nombres (se puede volver a ejecutar)
   await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
   await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
+  await db.exec(leer('supabase/migrations/202611140005_movimiento_situacion_fisica_comercial.sql'));
   await db.exec(`INSERT INTO auth.users(id) VALUES ${UUIDS.map(id => `('${id}')`).join(',')};
     INSERT INTO public.rol(nomrol,estrol) VALUES ('Gerente',true),('Administradora',true),('Vendedor',true);
     INSERT INTO public.usuario(uuidusu,codrol,nomusu,apepatusu,corusu,estusu)
@@ -732,7 +733,7 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     await propietario(() => db.exec('DROP TRIGGER hu022_fallar_segunda_venta_test ON public.venta; DROP FUNCTION public.hu022_fallar_segunda_venta_test()'));
   });
 
-  await t.test('HU-022: no libera la unidad anterior mientras conserva un movimiento HU-003 en tránsito', async () => {
+  await t.test('HU-022: la unidad anterior queda Disponible con movimiento activo y sin otro compromiso', async () => {
     const extra = unidadesHu022;
     await login(3);
     const ventaBase = await venta(extra[10]!, { decision: 'Por definir' });
@@ -748,16 +749,24 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     const movimientoAntes = await propietario(() => escalar<Record<string, unknown>>(
       "SELECT jsonb_build_object('coduni',coduni::text,'codubiori',codubiori::text,'codubides',codubides::text,'estado',estmub) r FROM public.movimientoubicacion WHERE codmub=$1",
       [codmub]));
+    const fisicoAntes = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('ubicacion',u.codubi::text,'techo',u.codtte::text,'proveedor',u.codpro::text,
+        'detalleTecho',u.dettecuni,'preparacion',pg_catalog.to_jsonb(p)-'coduni') r
+       FROM public.unidad u LEFT JOIN public.preparacionunidad p USING(coduni) WHERE u.coduni=$1`, [extra[10]]));
 
     const corregida = await corregirRelacion(String(ventaBase.codven), null, extra[23]!, 1, 'La unidad anterior mantiene un traslado activo');
     const operacion = (corregida.operaciones as Array<Record<string, unknown>>)[0]!;
-    assert.equal(operacion.estadoUnidadOrigenResultante, 'No disponible');
-    assert.equal(await estadoUnidad(extra[10]!), 'No disponible');
+    assert.equal(operacion.estadoUnidadOrigenResultante, 'Disponible');
+    assert.equal(await estadoUnidad(extra[10]!), 'Disponible');
     assert.equal(await estadoUnidad(extra[23]!), 'Vendida');
     const movimientoDespues = await propietario(() => escalar<Record<string, unknown>>(
       "SELECT jsonb_build_object('coduni',coduni::text,'codubiori',codubiori::text,'codubides',codubides::text,'estado',estmub) r FROM public.movimientoubicacion WHERE codmub=$1",
       [codmub]));
     assert.deepEqual(movimientoDespues, movimientoAntes);
     assert.equal(await propietario(() => escalar<string>('SELECT codubi::text r FROM public.unidad WHERE coduni=$1', [extra[10]])), codubiOrigen);
+    assert.deepEqual(await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('ubicacion',u.codubi::text,'techo',u.codtte::text,'proveedor',u.codpro::text,
+        'detalleTecho',u.dettecuni,'preparacion',pg_catalog.to_jsonb(p)-'coduni') r
+       FROM public.unidad u LEFT JOIN public.preparacionunidad p USING(coduni) WHERE u.coduni=$1`, [extra[10]])), fisicoAntes);
   });
 });

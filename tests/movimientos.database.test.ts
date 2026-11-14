@@ -125,6 +125,8 @@ test('HU-003 PostgreSQL: ciclo de movimientos, permisos, historial e integridad 
     const unidadSinUbicacion = await crearUnidad('SIN-UBICACION', null);
     const unidadDesfasada = await crearUnidad('DESFASADA', loc.ancon);
     const unidadOperativa = await crearUnidad('OPERATIVA', loc.ancon);
+    await administrativo(() => db.query(
+      "UPDATE public.unidad SET estcomuni='Disponible' WHERE coduni=ANY($1::bigint[])", [[unidadGerente, unidadAdmin]]));
     let movimientoGerente = '';
     let movimientoAdmin = '';
     await login(1);
@@ -136,6 +138,8 @@ test('HU-003 PostgreSQL: ciclo de movimientos, permisos, historial e integridad 
       assert.equal(g.estado, 'En transito');
       assert.equal(g.origen.codubi, loc.ancon); assert.equal(g.destino.codubi, loc.fivesa);
       assert.equal(g.autorSalida?.nombre, 'Gerente QA');
+      assert.equal(await escalarAdmin<string>('SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [unidadGerente]), 'Disponible',
+        'iniciar un traslado no cambia la situación comercial de la unidad');
       const ubicacionG = await escalarAdmin<string>('SELECT codubi::text r FROM public.unidad WHERE coduni=$1', [unidadGerente]);
       assert.equal(ubicacionG, loc.ancon);
 
@@ -144,6 +148,8 @@ test('HU-003 PostgreSQL: ciclo de movimientos, permisos, historial e integridad 
         [unidadAdmin, loc.ancon, loc.comas, null]);
       movimientoAdmin = a.codmub;
       assert.equal(a.estado, 'En transito'); assert.equal(a.autorSalida?.nombre, 'Administradora QA');
+      assert.equal(await escalarAdmin<string>('SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [unidadAdmin]), 'Disponible',
+        'la segunda unidad también conserva su situación comercial');
       assert.equal(await escalarAdmin<string>('SELECT codubi::text r FROM public.unidad WHERE coduni=$1', [unidadAdmin]), loc.ancon);
     });
 
