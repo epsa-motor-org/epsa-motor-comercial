@@ -6,6 +6,7 @@ import type {
 
 const CAMPOS_VENTA = [
   'codcli', 'codusuResponsable', 'codsedAtencion', 'fechaVenta', 'modalidad', 'adicionalTechoAcordado',
+  'descuento', 'motivoDescuento', 'codusuAutorizadorDescuento', 'confirmacionTelefonicaRecibida',
   'codsedEntregaPrevista', 'pagos', 'techo', 'comprobanteExterno', 'observacion'
 ] as const;
 const CAMPOS_PAGO = [
@@ -54,6 +55,13 @@ function validarAdicionalTecho(valor: unknown, campo: string): number {
   if (typeof valor !== 'number' || !Number.isFinite(valor) || valor < 0
     || valor > 99999999.99 || Number(valor.toFixed(2)) !== valor)
     throw new ErrorHttp(400, `${campo} debe ser un número no negativo con hasta dos decimales`);
+  return valor;
+}
+
+function validarDescuento(valor: unknown): number {
+  if (typeof valor !== 'number' || !Number.isFinite(valor) || valor < 0
+    || valor > 99999999.99 || Number(valor.toFixed(2)) !== valor)
+    throw new ErrorHttp(400, 'descuento debe ser un importe no negativo con hasta dos decimales');
   return valor;
 }
 
@@ -152,6 +160,19 @@ export function validarCrearVenta(coduni: unknown, body: unknown, clave: unknown
   const techo = validarTecho(datos.techo);
   const adicionalTechoAcordado = datos.adicionalTechoAcordado === undefined || datos.adicionalTechoAcordado === null
     ? null : validarAdicionalTecho(datos.adicionalTechoAcordado, 'adicionalTechoAcordado');
+  const descuento = datos.descuento === undefined ? 0 : validarDescuento(datos.descuento);
+  const motivoDescuento = texto(datos.motivoDescuento, 'motivoDescuento', 500);
+  const codusuAutorizadorDescuento = datos.codusuAutorizadorDescuento === undefined
+    || datos.codusuAutorizadorDescuento === null ? null
+    : idPositivo(datos.codusuAutorizadorDescuento, 'codusuAutorizadorDescuento');
+  const confirmacionTelefonicaRecibida = datos.confirmacionTelefonicaRecibida === undefined
+    ? false : datos.confirmacionTelefonicaRecibida;
+  if (typeof confirmacionTelefonicaRecibida !== 'boolean')
+    throw new ErrorHttp(400, 'confirmacionTelefonicaRecibida debe ser booleano');
+  if (descuento === 0 && (motivoDescuento !== null || codusuAutorizadorDescuento !== null || confirmacionTelefonicaRecibida))
+    throw new ErrorHttp(400, 'Los datos de autorización solo se admiten con descuento mayor a cero');
+  if (descuento > 0 && (!motivoDescuento || !codusuAutorizadorDescuento || !confirmacionTelefonicaRecibida))
+    throw new ErrorHttp(400, 'Un descuento mayor a cero requiere motivo, autorizador y confirmación telefónica');
   if (techo?.decision === 'Con techo' && adicionalTechoAcordado === null)
     throw new ErrorHttp(400, 'adicionalTechoAcordado es obligatorio cuando la decisión es Con techo');
   if (techo && techo.decision !== 'Con techo' && adicionalTechoAcordado !== null && adicionalTechoAcordado !== 0)
@@ -166,6 +187,10 @@ export function validarCrearVenta(coduni: unknown, body: unknown, clave: unknown
     p_fecven: fecha(datos.fechaVenta, 'fechaVenta'),
     p_modcomven: datos.modalidad as ModalidadVenta,
     p_adicionalacordado: adicionalTechoAcordado,
+    p_descuento: descuento,
+    p_motivodescuento: motivoDescuento,
+    p_codusuautorizadesc: codusuAutorizadorDescuento,
+    p_conftelefonicadesc: confirmacionTelefonicaRecibida,
     p_codsedentregaprevista: entrega,
     p_pagos: validarPagos(datos.pagos),
     p_techo: techo,

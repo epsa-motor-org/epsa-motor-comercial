@@ -278,7 +278,7 @@ test('HU-005 apoyo: registra el techo que eligió el cliente de una moto separad
 }));
 
 for (const [codigo, estado, mensaje] of [
-  ['PT438', 409, 'La elección de techo no es compatible con el techo instalado o configurado en esta unidad'],
+  ['PT438', 409, 'La elección de techo no es compatible con el techo instalado en esta unidad'],
   ['PT439', 422, 'El tipo de techo no existe o está inactivo'],
   ['PT440', 409, 'La elección de techo ya está guardada y no se puede modificar']
 ] as const) {

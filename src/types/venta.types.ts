@@ -39,6 +39,10 @@ export interface CrearVentaRequest {
   modalidad: ModalidadVenta;
   /** El precio base se obtiene en PostgreSQL desde modelo.premod. */
   adicionalTechoAcordado?: number;
+  descuento?: number;
+  motivoDescuento?: string;
+  codusuAutorizadorDescuento?: number;
+  confirmacionTelefonicaRecibida?: boolean;
   codsedEntregaPrevista?: number | null;
   pagos?: PagoVentaRequest[];
   techo?: TechoVentaRequest | null;
@@ -65,6 +69,10 @@ export interface CrearVentaInput {
   p_fecven: string;
   p_modcomven: ModalidadVenta;
   p_adicionalacordado: number | null;
+  p_descuento: number;
+  p_motivodescuento: string | null;
+  p_codusuautorizadesc: string | null;
+  p_conftelefonicadesc: boolean;
   p_codsedentregaprevista: string | null;
   p_pagos: PagoVentaInput[];
   p_techo: TechoVentaRequest | null;
@@ -120,6 +128,13 @@ export interface CrearVentaResultado {
   precioBaseAcordado: number | null;
   adicionalTechoReferencial: number | null;
   adicionalTechoAcordado: number | null;
+  importeAntesDescuento: number | null;
+  descuento: number | null;
+  motivoDescuento: string | null;
+  codusuAutorizadorDescuento: string | null;
+  nombreAutorizadorDescuento: string | null;
+  confirmacionTelefonicaRecibida: boolean | null;
+  fechaConfirmacionTelefonica: string | null;
   importe: number;
   totalRecibido: number;
   saldo: number;
@@ -145,6 +160,13 @@ export interface GuardarTechoVentaResultado {
   precioBaseAcordado: number | null;
   adicionalTechoReferencial: number | null;
   adicionalTechoAcordado: number | null;
+  importeAntesDescuento: number | null;
+  descuento: number | null;
+  motivoDescuento: string | null;
+  codusuAutorizadorDescuento: string | null;
+  nombreAutorizadorDescuento: string | null;
+  confirmacionTelefonicaRecibida: boolean | null;
+  fechaConfirmacionTelefonica: string | null;
   importe: number | null;
   totalRecibido: number | null;
   saldo: number | null;
@@ -194,6 +216,13 @@ export interface VentaListado {
   precioBaseAcordado: number | null;
   adicionalTechoReferencial: number | null;
   adicionalTechoAcordado: number | null;
+  importeAntesDescuento: number | null;
+  descuento: number | null;
+  motivoDescuento: string | null;
+  codusuAutorizadorDescuento: string | null;
+  nombreAutorizadorDescuento: string | null;
+  confirmacionTelefonicaRecibida: boolean | null;
+  fechaConfirmacionTelefonica: string | null;
   total: number | null;
   adelanto: number;
   pagos: Array<{ numero: number; monto: number; fecha: string; medioPago: string; referencia: string | null }>;
