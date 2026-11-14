@@ -137,11 +137,20 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       [coduni, responsable, claveNueva()]);
     return resultado.codsep;
   };
+  const crearSeparacionComercialResidualHU021 = (coduni: string) => propietario(() => escalar<string>(
+    `INSERT INTO public.separacion(
+       coduni,codcli,codusu,codusuresp,monadesep,fecpagsep,metpagsep,obssep,
+       ingconfsep,codusuconfsep,fecconfsep,idempotenciasep,estsep)
+     VALUES ($1,1,3,3,100,'2026-11-12','Efectivo','Compromiso comercial activo',
+       TRUE,3,pg_catalog.clock_timestamp(),$2,'Activa') RETURNING codsep::text r`, [coduni, claveNueva()]));
   const crearMovimientoActivoHU021 = async (coduni: string, estado: 'Pendiente' | 'En transito') => propietario(async () => {
-    const codubi = await escalar<string>("SELECT codubi::text r FROM public.ubicacion WHERE nomubi='Comas HU006'");
-    await db.query('UPDATE public.unidad SET codubi=$1 WHERE coduni=$2', [codubi, coduni]);
+    const ubicaciones = await db.query<{ codubi: string; nomubi: string }>(
+      "SELECT codubi::text,nomubi FROM public.ubicacion WHERE nomubi IN ('Ventanilla','Comas HU006')");
+    const origen = ubicaciones.rows.find(fila => fila.nomubi === 'Ventanilla')!.codubi;
+    const destino = ubicaciones.rows.find(fila => fila.nomubi === 'Comas HU006')!.codubi;
+    await db.query('UPDATE public.unidad SET codubi=$1 WHERE coduni=$2', [origen, coduni]);
     await db.query(`INSERT INTO public.movimientoubicacion(coduni,codubiori,codubides,codusu,obsmub,estmub)
-      VALUES ($1,2,$2,1,'Movimiento de prueba HU-021',$3)`, [coduni, codubi, estado]);
+      VALUES ($1,$2,$3,1,'Movimiento de prueba HU-021',$4)`, [coduni, origen, destino, estado]);
   });
   const snapshotFisicoMovimientoHU021 = (coduni: string) => propietario(() => escalar<Record<string, unknown>>(
     `SELECT jsonb_build_object(
@@ -151,6 +160,8 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       'movimientos',COALESCE((SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(m)-'coduni' ORDER BY m.codmub)
         FROM public.movimientoubicacion m WHERE m.coduni=u.coduni),'[]'::jsonb)) r
      FROM public.unidad u WHERE u.coduni=$1`, [coduni]));
+  const estadoComercialHU021 = (coduni: string) => propietario(() => escalar<string>(
+    'SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [coduni]));
 
   await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE SCHEMA auth; CREATE SCHEMA storage;
     CREATE TABLE auth.users(id uuid PRIMARY KEY);
@@ -255,9 +266,13 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await db.exec(leer('supabase/migrations/202611120003_hu005_adelanto_minimo.sql'));
     await db.exec(leer('supabase/migrations/202611120004_hu021_cancelaciones.sql'));
     await db.exec(leer('supabase/migrations/202611130001_hu005_hu006_techo_configurado_y_catalogo.sql'));
+    await db.exec(leer('supabase/migrations/202611130002_hu022_correccion_relacion_venta.sql'));
+    await db.exec(leer('supabase/migrations/202611130003_hu022_estado_unidad_movimiento_activo.sql'));
     await db.exec(leer('supabase/migrations/202611140001_hu005_techo_solo_instalado.sql'));
     await db.exec(leer('supabase/migrations/202611140002_hu006_descuento_comercial.sql'));
     await db.exec(leer('supabase/migrations/202611140003_hu021_cancelacion_estado_e_inmutabilidad.sql'));
+    await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
+    await db.exec(leer('supabase/migrations/202611140005_movimiento_situacion_fisica_comercial.sql'));
   });
 
   const tipos = await propietario(async () => (await db.query<{ codtte: string }>(
@@ -1302,7 +1317,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       antes.fechaConfirmacion, 9500, 100, 250, 9250, 'Cancelada']);
   });
 
-  await t.test('HU-021: el estado resultante conserva No disponible por movimiento HU-003 activo', async movementTest => {
+  await t.test('HU-021: un movimiento activo no bloquea la disponibilidad comercial después de cancelar', async movementTest => {
     const casos = [
       { operacion: 'separación', movimiento: 'Pendiente' as const },
       { operacion: 'separación', movimiento: 'En transito' as const },
@@ -1321,12 +1336,63 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       const resultado = codsep !== null
         ? await cancelarSeparacion(codsep, 'Prueba de movimiento activo', 'Adelanto conservado')
         : await cancelarVentaHU021(codven!, 'Prueba de movimiento activo', null);
-      assert.equal(resultado.estadoComercialUnidad, 'No disponible');
+      assert.equal(resultado.estadoComercialUnidad, 'Disponible');
       assert.equal(await propietario(() => escalar<string>(
-        'SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [unidad])), 'No disponible');
+        'SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [unidad])), 'Disponible');
       assert.deepEqual(await snapshotFisicoMovimientoHU021(unidad), antes,
         'ubicación, preparación y movimiento siguen intactos');
     });
+  });
+
+  await t.test('HU-021 conserva otros compromisos comerciales aunque la unidad tenga un movimiento activo', async () => {
+    const unidadConOtraSeparacion = await crearUnidadHU021();
+    await login(3);
+    const venta = await crearVenta(unidadConOtraSeparacion, { clave: claveNueva() });
+    const sepVigente = await crearSeparacionComercialResidualHU021(unidadConOtraSeparacion);
+    await crearMovimientoActivoHU021(unidadConOtraSeparacion, 'En transito');
+    const fisicoAntes = await snapshotFisicoMovimientoHU021(unidadConOtraSeparacion);
+    const cancelacionVenta = await cancelarVentaHU021(venta.codven, 'Cancelar sin liberar separación', null);
+    assert.equal(cancelacionVenta.estadoComercialUnidad, 'Separada');
+    assert.equal(await estadoComercialHU021(unidadConOtraSeparacion), 'Separada');
+    assert.equal(await propietario(() => escalar<string>(
+      'SELECT estsep r FROM public.separacion WHERE codsep=$1', [sepVigente])), 'Activa');
+    assert.deepEqual(await snapshotFisicoMovimientoHU021(unidadConOtraSeparacion), fisicoAntes);
+
+    const unidadConOtraVenta = await crearUnidadHU021();
+    await login(3);
+    const sepAEliminar = await crearSeparacionHU021(unidadConOtraVenta);
+    const ventaVigente = await crearVenta(unidadConOtraVenta, { clave: claveNueva() });
+    const sepIndependiente = await crearSeparacionComercialResidualHU021(unidadConOtraVenta);
+    await crearMovimientoActivoHU021(unidadConOtraVenta, 'Pendiente');
+    const fisicoAntesCancelacion = await snapshotFisicoMovimientoHU021(unidadConOtraVenta);
+    const cancelacionSep = await cancelarSeparacion(sepIndependiente, 'Cancelar separación independiente', 'Venta vigente');
+    assert.equal(cancelacionSep.estadoComercialUnidad, 'Vendida');
+    assert.equal(await estadoComercialHU021(unidadConOtraVenta), 'Vendida');
+    assert.equal(await propietario(() => escalar<string>(
+      'SELECT estven r FROM public.venta WHERE codven=$1', [ventaVigente.codven])), 'Registrada');
+    assert.deepEqual(await snapshotFisicoMovimientoHU021(unidadConOtraVenta), fisicoAntesCancelacion);
+    assert.equal(await propietario(() => escalar<string>(
+      'SELECT estsep r FROM public.separacion WHERE codsep=$1', [sepAEliminar])), 'Convertida');
+  });
+
+  await t.test('HU-005/HU-006 permiten una nueva operación comercial sobre unidad Disponible en tránsito', async () => {
+    const unidadParaSeparar = await crearUnidadHU021();
+    await crearMovimientoActivoHU021(unidadParaSeparar, 'En transito');
+    const fisicoAntesSeparacion = await snapshotFisicoMovimientoHU021(unidadParaSeparar);
+    await login(3);
+    const codsep = await crearSeparacionHU021(unidadParaSeparar);
+    assert.ok(codsep);
+    assert.equal(await estadoComercialHU021(unidadParaSeparar), 'Separada');
+    assert.deepEqual(await snapshotFisicoMovimientoHU021(unidadParaSeparar), fisicoAntesSeparacion);
+
+    const unidadParaVender = await crearUnidadHU021();
+    await crearMovimientoActivoHU021(unidadParaVender, 'En transito');
+    const fisicoAntesVenta = await snapshotFisicoMovimientoHU021(unidadParaVender);
+    await login(3);
+    const venta = await crearVenta(unidadParaVender, { clave: claveNueva() });
+    assert.ok(venta.codven);
+    assert.equal(await estadoComercialHU021(unidadParaVender), 'Vendida');
+    assert.deepEqual(await snapshotFisicoMovimientoHU021(unidadParaVender), fisicoAntesVenta);
   });
 
   await t.test('HU-021: sin otro compromiso ni movimiento activo la unidad vuelve a Disponible', async () => {
