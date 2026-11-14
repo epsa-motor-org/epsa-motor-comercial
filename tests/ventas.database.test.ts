@@ -9,6 +9,9 @@ interface ErrorSQL { code?: string; message?: string }
 interface VentaSQL {
   codven: string; coduni: string; codcli: string; codsep: string | null; importe: number;
   precioBaseAcordado: number | null; adicionalTechoReferencial: number | null; adicionalTechoAcordado: number | null;
+  importeAntesDescuento: number | null; descuento: number | null; motivoDescuento: string | null;
+  codusuAutorizadorDescuento: string | null; confirmacionTelefonicaRecibida: boolean | null;
+  fechaConfirmacionTelefonica: string | null;
   totalRecibido: number; saldo: number; estado: string; reutilizada: boolean;
   modalidad: string; techo: { decision: string; codtte: string | null };
   pagos: Array<{ monto: number; medioPago: string; confirmadoPor: string; rutaEvidencia: string | null }>;
@@ -59,6 +62,8 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     codcli: number; responsable: number; sede: number; fecha: string; modalidad: string;
     adicional: number | null; entrega: number | null; pagos: unknown[]; techo: unknown;
     refcomp: string | null; feccomp: string | null; observacion: string | null; clave: string;
+    descuento: number; motivoDescuento: string | null; codusuAutorizadorDescuento: number | null;
+    confirmacionTelefonicaRecibida: boolean;
   }> = {}) => [
     coduni, opciones.codcli ?? 1, opciones.responsable ?? 3, opciones.sede ?? 1,
     opciones.fecha ?? '2026-11-09', opciones.modalidad ?? 'Crédito', opciones.adicional ?? null,
@@ -66,10 +71,11 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     opciones.techo === undefined ? JSON.stringify({ decision: 'Por definir' })
       : opciones.techo === null ? null : JSON.stringify(opciones.techo),
     opciones.refcomp ?? null, opciones.feccomp ?? null, opciones.observacion ?? null,
-    opciones.clave ?? claveNueva()
+    opciones.clave ?? claveNueva(), opciones.descuento ?? 0, opciones.motivoDescuento ?? null,
+    opciones.codusuAutorizadorDescuento ?? null, opciones.confirmacionTelefonicaRecibida ?? false
   ];
   const crearVenta = (coduni: string, opciones: Parameters<typeof ventaParams>[1] = {}) =>
-    escalar<VentaSQL>('SELECT public.hu006_crear_venta($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14::uuid) r',
+    escalar<VentaSQL>('SELECT public.hu006_crear_venta($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14::uuid,$15,$16,$17,$18) r',
       ventaParams(coduni, opciones));
   const crearVentaHistorica = (
     coduni: string, decision: 'Por definir' | 'Sin techo' | 'Con techo', codtte: number | null = null, heredarTecho = false
@@ -234,6 +240,9 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await db.exec(leer('supabase/migrations/202611120002_hu006_listar_ventas.sql'));
     await db.exec(leer('supabase/migrations/202611120003_hu005_adelanto_minimo.sql'));
     await db.exec(leer('supabase/migrations/202611120004_hu021_cancelaciones.sql'));
+    await db.exec(leer('supabase/migrations/202611130001_hu005_hu006_techo_configurado_y_catalogo.sql'));
+    await db.exec(leer('supabase/migrations/202611140001_hu005_techo_solo_instalado.sql'));
+    await db.exec(leer('supabase/migrations/202611140002_hu006_descuento_comercial.sql'));
   });
 
   const tipos = await propietario(async () => (await db.query<{ codtte: string }>(
@@ -693,20 +702,21 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
   await t.test('La conversión también aplica compatibilidad con un techo instalado después de separar', async () => {
     const unidad = codunis[22]!;
     await login(3);
-    await crearSeparacion(unidad, 1, 'Sin techo');
+    const codsep = await crearSeparacion(unidad, 1, 'Sin techo');
     await login(1);
     const lona = Number(tipos);
-    await propietario(async () => {
-      await db.query('UPDATE unidad SET codtte=$1 WHERE coduni=$2', [lona, unidad]);
-      await db.query("UPDATE preparacionunidad SET esttecho='Instalado' WHERE coduni=$1", [unidad]);
-    });
+    await assert.rejects(propietario(() => db.query('UPDATE unidad SET codtte=$1 WHERE coduni=$2', [lona, unidad])), error('PT423'),
+      'no se configura físicamente un techo que contradice la decisión final Sin techo');
     await login(3);
-    await assert.rejects(crearVenta(unidad, { techo: null, clave: claveNueva() }), error('PT613'));
-    const estado = await propietario(() => escalar<{ venta: number; separacion: string; comercial: string }>(
-      `SELECT jsonb_build_object('venta',(SELECT count(*)::int FROM venta WHERE coduni=u.coduni),
-        'separacion',s.estsep,'comercial',u.estcomuni) r FROM unidad u
+    const convertida = await crearVenta(unidad, { techo: null, clave: claveNueva() });
+    assert.equal(convertida.codsep, codsep);
+    assert.equal(convertida.techo.decision, 'Sin techo');
+    const estado = await propietario(() => escalar<{ ventas: number; separacion: string; comercial: string; codtte: string | null }>(
+      `SELECT jsonb_build_object('ventas',(SELECT count(*)::int FROM venta WHERE coduni=u.coduni),
+        'separacion',s.estsep,'comercial',u.estcomuni,'codtte',u.codtte::text) r FROM unidad u
       JOIN separacion s USING(coduni) WHERE u.coduni=$1`, [unidad]));
-    assert.deepEqual(estado, { venta: 0, separacion: 'Activa', comercial: 'Separada' });
+    assert.deepEqual(estado, { ventas: 1, separacion: 'Convertida', comercial: 'Vendida', codtte: null });
+    assert.ok(lona > 0);
   });
 
   await t.test('Perfiles comerciales permitidos; rol ajeno rechazado y acceso directo a tablas bloqueado', async () => {
@@ -886,10 +896,11 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await assert.rejects(cancelarVentaHU021(ventaAutor.codven, 'Autor ya no asignado', null), error('PT652'));
     await login(6);
     const claveVenta = claveNueva();
-    assert.equal((await cancelarVentaHU021(ventaAutor.codven, 'Responsable reasignado', null, claveVenta)).estado, 'Cancelada');
-    await propietario(() => db.query('UPDATE public.venta SET codusuresp=3 WHERE codven=$1', [ventaAutor.codven]));
-    await assert.rejects(cancelarVentaHU021(ventaAutor.codven, 'Responsable reasignado', null, claveVenta), error('PT652'),
-      'el replay también verifica el responsable vigente después del lock');
+    const canceladaPorResponsable = await cancelarVentaHU021(ventaAutor.codven, 'Responsable reasignado', null, claveVenta);
+    assert.equal(canceladaPorResponsable.estado, 'Cancelada');
+    const replayResponsable = await cancelarVentaHU021(ventaAutor.codven, 'Responsable reasignado', null, claveVenta);
+    assert.equal(replayResponsable.reutilizada, true,
+      'el replay autorizado por el responsable vigente recupera la cancelación sin reescribir una venta histórica');
 
     const responsableUnidad = await crearUnidadHU021();
     await login(1);
@@ -1112,5 +1123,148 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
        JOIN public.separacion s ON s.coduni=u.coduni AND s.estsep='Activa' WHERE v.codven=$1`, [codven]));
     assert.deepEqual(estado, { venta: 'Cancelada', separacion: 'Activa', unidad: 'Separada' });
     assert.ok(Number(codsep) > 0);
+  });
+
+  await t.test('HU-006 descuento: cálculo neto, autorizador validado, replay y proyecciones', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(3);
+    const opciones = {
+      descuento: 500, motivoDescuento: 'Campaña autorizada por llamada',
+      codusuAutorizadorDescuento: 1, confirmacionTelefonicaRecibida: true, clave: claveNueva()
+    };
+    const creada = await crearVenta(unidad, opciones);
+    assert.deepEqual([creada.autor.codusu, creada.codusuAutorizadorDescuento, creada.descuento,
+      creada.importeAntesDescuento, creada.importe, creada.totalRecibido, creada.saldo],
+    ['3', '1', 500, 10000, 9500, 0, 9500]);
+    assert.equal(creada.confirmacionTelefonicaRecibida, true);
+    assert.ok(creada.fechaConfirmacionTelefonica);
+    const replay = await crearVenta(unidad, opciones);
+    assert.deepEqual([replay.codven, replay.importe, replay.descuento, replay.reutilizada],
+      [creada.codven, 9500, 500, true]);
+    await assert.rejects(crearVenta(unidad, { ...opciones, descuento: 400 }), error('PT611'));
+    await assert.rejects(crearVenta(unidad, { ...opciones, codusuAutorizadorDescuento: 2 }), error('PT611'));
+
+    const datos = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('operador',codusu::text,'descuento',descuentoven,
+        'motivo',motivodescuentoven,'autorizador',codusuautorizadesc::text,
+        'confirmacion',conftelefonicadesc,'fecha',fecconftelefonicadesc IS NOT NULL,
+        'base',prebaseven,'adicional',adicionalacordadoven,'total',impven) r
+       FROM venta WHERE codven=$1`, [creada.codven]));
+    assert.deepEqual(datos, { operador: '3', descuento: 500, motivo: opciones.motivoDescuento,
+      autorizador: '1', confirmacion: true, fecha: true, base: 10000, adicional: 0, total: 9500 });
+
+    const ficha = await escalar<Record<string, unknown>>('SELECT public.hu006_venta_de_unidad($1) r', [unidad]);
+    assert.deepEqual([ficha.descuento, ficha.importeAntesDescuento, ficha.importe], [500, 10000, 9500]);
+    const lista = await escalar<{ items: Array<Record<string, unknown>> }>('SELECT public.hu006_listar_ventas(NULL,100,0) r');
+    const item = lista.items.find(fila => fila.codven === creada.codven)!;
+    assert.deepEqual([item.descuento, item.importeAntesDescuento, item.total], [500, 10000, 9500]);
+  });
+
+  await t.test('HU-006 descuento: cero explícito; máximo permitido sin dinero recibido; validaciones PostgreSQL', async () => {
+    await login(3);
+    const unidadCero = await crearUnidadHU021();
+    const sinDescuento = await crearVenta(unidadCero, { descuento: 0, clave: claveNueva() });
+    assert.deepEqual([sinDescuento.descuento, sinDescuento.motivoDescuento,
+      sinDescuento.codusuAutorizadorDescuento, sinDescuento.confirmacionTelefonicaRecibida,
+      sinDescuento.fechaConfirmacionTelefonica], [0, null, null, false, null]);
+
+    const unidadCeroTotal = await crearUnidadHU021();
+    const totalCero = await crearVenta(unidadCeroTotal, { descuento: 10000,
+      motivoDescuento: 'Descuento total declarado', codusuAutorizadorDescuento: 2,
+      confirmacionTelefonicaRecibida: true, clave: claveNueva() });
+    assert.deepEqual([totalCero.importeAntesDescuento, totalCero.importe, totalCero.totalRecibido, totalCero.saldo],
+      [10000, 0, 0, 0]);
+
+    const sinDinero = await crearUnidadHU021();
+    await assert.rejects(crearVenta(sinDinero, { descuento: 10000.01,
+      motivoDescuento: 'No superar el precio', codusuAutorizadorDescuento: 1,
+      confirmacionTelefonicaRecibida: true, clave: claveNueva() }), error('PT624'));
+    const conAdelanto = await crearUnidadHU021();
+    const codsep = await crearSeparacionHU021(conAdelanto);
+    await assert.rejects(crearVenta(conAdelanto, { techo: null, descuento: 10000,
+      motivoDescuento: 'El total cero no cubre el adelanto', codusuAutorizadorDescuento: 1,
+      confirmacionTelefonicaRecibida: true, clave: claveNueva() }), error('PT612'));
+    const separacionIntacta = await propietario(() => escalar<{ ventas: number; estado: string; separacion: string }>(
+      `SELECT jsonb_build_object('ventas',(SELECT count(*)::int FROM venta WHERE coduni=u.coduni),
+        'estado',u.estcomuni,'separacion',s.estsep) r FROM unidad u JOIN separacion s USING(coduni) WHERE u.coduni=$1`, [conAdelanto]));
+    assert.deepEqual(separacionIntacta, { ventas: 0, estado: 'Separada', separacion: 'Activa' });
+    assert.ok(Number(codsep) > 0);
+    const autorNoExiste = await crearUnidadHU021();
+    await assert.rejects(crearVenta(autorNoExiste, { descuento: 1, motivoDescuento: 'Campaña',
+      codusuAutorizadorDescuento: 9999, confirmacionTelefonicaRecibida: true, clave: claveNueva() }), error('PT625'));
+    const autorVendedor = await crearUnidadHU021();
+    await assert.rejects(crearVenta(autorVendedor, { descuento: 1, motivoDescuento: 'Campaña',
+      codusuAutorizadorDescuento: 3, confirmacionTelefonicaRecibida: true, clave: claveNueva() }), error('PT625'));
+    const autorInactivo = await crearUnidadHU021();
+    await propietario(() => db.query('UPDATE public.usuario SET estusu=false WHERE codusu=2'));
+    await assert.rejects(crearVenta(autorInactivo, { descuento: 1, motivoDescuento: 'Campaña',
+      codusuAutorizadorDescuento: 2, confirmacionTelefonicaRecibida: true, clave: claveNueva() }), error('PT625'));
+    await propietario(() => db.query('UPDATE public.usuario SET estusu=true WHERE codusu=2'));
+    const rolInactivo = await crearUnidadHU021();
+    await propietario(() => db.query("UPDATE public.rol SET estrol=false WHERE nomrol='Administradora'"));
+    await assert.rejects(crearVenta(rolInactivo, { descuento: 1, motivoDescuento: 'Campaña',
+      codusuAutorizadorDescuento: 2, confirmacionTelefonicaRecibida: true, clave: claveNueva() }), error('PT625'));
+    await propietario(() => db.query("UPDATE public.rol SET estrol=true WHERE nomrol='Administradora'"));
+    for (const unidad of [sinDinero, autorNoExiste, autorVendedor, autorInactivo, rolInactivo]) {
+      assert.equal(await propietario(() => escalar<number>('SELECT count(*)::int r FROM public.venta WHERE coduni=$1', [unidad])), 0);
+      assert.equal(await propietario(() => escalar<string>('SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [unidad])), 'Disponible');
+    }
+    assert.equal(await propietario(() => escalar<string>('SELECT estcomuni r FROM public.unidad WHERE coduni=$1', [conAdelanto])), 'Separada');
+  });
+
+  await t.test('HU-006 descuento en conversión y resolución de Por definir conserva adelanto y acuerdo', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(3);
+    const codsep = await crearSeparacion(unidad, 1, 'Por definir');
+    const opciones = { techo: null, descuento: 500, motivoDescuento: 'Autorizado por llamada',
+      codusuAutorizadorDescuento: 1, confirmacionTelefonicaRecibida: true, clave: claveNueva() };
+    const venta = await crearVenta(unidad, opciones);
+    assert.equal(venta.codsep, codsep);
+    assert.deepEqual([venta.importeAntesDescuento, venta.descuento, venta.importe, venta.totalRecibido, venta.saldo],
+      [10000, 500, 9500, 200, 9300]);
+    const resuelta = await guardarTechoVenta(venta.codven, 'Con techo', Number(tipos), 175);
+    assert.deepEqual([resuelta.importeAntesDescuento, resuelta.descuento, resuelta.importe,
+      resuelta.totalRecibido, resuelta.saldo, resuelta.motivoDescuento,
+      resuelta.codusuAutorizadorDescuento, resuelta.confirmacionTelefonicaRecibida],
+    [10175, 500, 9675, 200, 9475, 'Autorizado por llamada', '1', true]);
+    const repetida = await guardarTechoVenta(venta.codven, 'Con techo', Number(tipos), 175);
+    assert.deepEqual([repetida.importe, repetida.descuento, repetida.totalRecibido, repetida.saldo], [9675, 500, 200, 9475]);
+    const persistido = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('ventas',(SELECT count(*)::int FROM venta WHERE coduni=$1),
+        'separacion',s.estsep,'adelanto',s.monadesep,'descuento',v.descuentoven,
+        'autorizador',v.codusuautorizadesc::text,'confirmacion',v.conftelefonicadesc,
+        'total',v.impven,'pagos',(SELECT count(*)::int FROM pagoventa WHERE codven=v.codven)) r
+       FROM venta v JOIN separacion s ON s.codsep=v.codsep WHERE v.codven=$2`, [unidad, venta.codven]));
+    assert.deepEqual(persistido, { ventas: 1, separacion: 'Convertida', adelanto: 200,
+      descuento: 500, autorizador: '1', confirmacion: true, total: 9675, pagos: 0 });
+  });
+
+  await t.test('HU-021 cancela venta con descuento preservando total neto, adelanto, pagos y evidencia', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(3);
+    const codsep = await crearSeparacionHU021(unidad);
+    const ruta = `ventas/${unidad}/hu021-descuento.pdf`;
+    await asegurarEvidenciaVenta(unidad, ruta);
+    const venta = await crearVenta(unidad, { descuento: 500, motivoDescuento: 'Autorizado por llamada',
+      codusuAutorizadorDescuento: 1, confirmacionTelefonicaRecibida: true,
+      pagos: [{ monto: 150, fecha: '2026-11-12', medioPago: 'Transferencia', referencia: 'OP-HU021-DESC',
+        rutaEvidencia: ruta, observacion: 'Pago conciliado', ingresoConfirmado: true, codusuConfirmador: 1 }],
+      clave: claveNueva() });
+    assert.equal(venta.codsep, codsep);
+    const cancelada = await cancelarVentaHU021(venta.codven, 'Corrección de venta descontada',
+      'Conservar lo cobrado para conciliación');
+    assert.deepEqual(cancelada.finanzasConservadas, {
+      importe: 9500, adelantoSeparacion: 100, pagosVenta: 150, cantidadPagos: 1,
+      totalRecibido: 250, saldo: 9250, comprobanteExternoConservado: false,
+      estadoSeparacionVinculada: 'Convertida'
+    });
+    const financiera = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('descuento',v.descuentoven,'motivo',v.motivodescuentoven,
+        'autorizador',v.codusuautorizadesc::text,'confirmacion',v.conftelefonicadesc,
+        'importe',v.impven,'pago',p.montopagven,'evidencia',p.rutavoucherven,
+        'separacion',s.monadesep) r FROM venta v JOIN pagoventa p USING(codven)
+        JOIN separacion s ON s.codsep=v.codsep WHERE v.codven=$1`, [venta.codven]));
+    assert.deepEqual(financiera, { descuento: 500, motivo: 'Autorizado por llamada', autorizador: '1',
+      confirmacion: true, importe: 9500, pago: 150, evidencia: ruta, separacion: 100 });
   });
 });

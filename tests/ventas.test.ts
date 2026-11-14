@@ -33,7 +33,10 @@ const venta = {
   responsable: { codusu: '3', nombre: 'QA Vendedor' }, sedeAtencion: { codsed: '2', nombre: 'Comas' },
   sedeEntregaPrevista: { codsed: '3', nombre: 'Ventanilla' }, fechaVenta: '2026-11-09T00:00:00Z',
   modalidad: 'Crédito', precioBaseAcordado: 10000, adicionalTechoReferencial: 0,
-  adicionalTechoAcordado: 0, importe: 10000, totalRecibido: 0, saldo: 10000, pagos: [],
+  adicionalTechoAcordado: 0, importeAntesDescuento: 10000, descuento: 0, motivoDescuento: null,
+  codusuAutorizadorDescuento: null, nombreAutorizadorDescuento: null,
+  confirmacionTelefonicaRecibida: false, fechaConfirmacionTelefonica: null,
+  importe: 10000, totalRecibido: 0, saldo: 10000, pagos: [],
   techo: { decision: 'Por definir', codtte: null, fecha: null, decididoPor: '3' },
   comprobanteExterno: null, observacion: 'Atención de prueba', estado: 'Registrada', reutilizada: false
 };
@@ -88,6 +91,7 @@ test('HU-006 HTTP: registra venta directa con el rol autenticado y llama una RPC
     nombre: 'hu006_crear_venta', token: 'vendedor', parametros: {
       p_coduni: '10', p_codcli: '20', p_codusuresp: '3', p_codsedatencion: '2',
       p_fecven: '2026-11-09', p_modcomven: 'Crédito', p_adicionalacordado: null,
+      p_descuento: 0, p_motivodescuento: null, p_codusuautorizadesc: null, p_conftelefonicadesc: false,
       p_codsedentregaprevista: '3', p_pagos: [], p_techo: { decision: 'Por definir' },
       p_refcompven: null, p_feccompven: null, p_obsven: 'Atención de prueba', p_idempotenciaven: KEY
     }
@@ -104,10 +108,31 @@ test('HU-006 HTTP: Con techo envía solo el adicional acordado, nunca un total i
   assert.deepEqual((llamadas[0]!.parametros as Record<string, unknown>), {
     p_coduni: '10', p_codcli: '20', p_codusuresp: '3', p_codsedatencion: '2',
     p_fecven: '2026-11-09', p_modcomven: 'Crédito', p_adicionalacordado: 3250,
+    p_descuento: 0, p_motivodescuento: null, p_codusuautorizadesc: null, p_conftelefonicadesc: false,
     p_codsedentregaprevista: '3', p_pagos: [], p_techo: { decision: 'Con techo', codtte: 4 },
     p_refcompven: null, p_feccompven: null, p_obsven: 'Atención de prueba', p_idempotenciaven: KEY
   });
   assert.ok(!('p_impven' in (llamadas[0]!.parametros as Record<string, unknown>)));
+}));
+
+test('HU-006 HTTP: descuento autorizado se envía a PostgreSQL con operador de sesión', async () => entorno(async (base, llamadas) => {
+  const body = { ...requestValido, descuento: 125.5, motivoDescuento: 'Descuento por campaña',
+    codusuAutorizadorDescuento: 1, confirmacionTelefonicaRecibida: true };
+  const r = await respuesta(fetch(`${base}/api/unidades/10/ventas`, {
+    method: 'POST', headers: { Authorization: 'Bearer vendedor', 'Content-Type': 'application/json', 'Idempotency-Key': KEY },
+    body: JSON.stringify(body)
+  }));
+  assert.equal(r.status, 201);
+  assert.deepEqual((llamadas[0]!.parametros as Record<string, unknown>), {
+    p_coduni: '10', p_codcli: '20', p_codusuresp: '3', p_codsedatencion: '2',
+    p_fecven: '2026-11-09', p_modcomven: 'Crédito', p_adicionalacordado: null,
+    p_descuento: 125.5, p_motivodescuento: 'Descuento por campaña', p_codusuautorizadesc: '1',
+    p_conftelefonicadesc: true, p_codsedentregaprevista: '3', p_pagos: [],
+    p_techo: { decision: 'Por definir' }, p_refcompven: null, p_feccompven: null,
+    p_obsven: 'Atención de prueba', p_idempotenciaven: KEY
+  });
+  assert.equal((llamadas[0]!.parametros as Record<string, unknown>).p_codusuresp, '3',
+    'el operador autenticado sigue siendo el responsable real de la solicitud');
 }));
 
 test('HU-006 HTTP: replay devuelve 200 y la conversión puede heredar techo sin mandarlo', async () => {
@@ -168,6 +193,13 @@ test('HU-006 HTTP: valida payload, techo, comprobante e Idempotency-Key antes de
   assert.equal((await enviar({ ...requestValido, importe: 1.001 })).status, 400);
   assert.equal((await enviar({ ...requestValido, adicionalTechoAcordado: 1.001 })).status, 400);
   assert.equal((await enviar({ ...requestValido, adicionalTechoAcordado: 100000000 })).status, 400);
+  assert.equal((await enviar({ ...requestValido, descuento: -1 })).status, 400);
+  assert.equal((await enviar({ ...requestValido, descuento: 1.001 })).status, 400);
+  assert.equal((await enviar({ ...requestValido, descuento: 1, motivoDescuento: 'Campaña' })).status, 400);
+  assert.equal((await enviar({ ...requestValido, descuento: 1, motivoDescuento: 'Campaña',
+    codusuAutorizadorDescuento: 1 })).status, 400);
+  assert.equal((await enviar({ ...requestValido, codusuAutorizadorDescuento: 1 })).status, 400);
+  assert.equal((await enviar({ ...requestValido, saldo: 1 })).status, 400);
   assert.equal((await enviar({ ...requestValido, techo: { decision: 'Con techo' } })).status, 400);
   assert.equal((await enviar({ ...requestValido, techo: { decision: 'Con techo', codtte: 2 } })).status, 400);
   assert.equal((await enviar({ ...requestValido, comprobanteExterno: { referencia: 'FAC-1', fecha: null } })).status, 400);
@@ -269,6 +301,7 @@ test('HU-006 HTTP: valida el comprobante posterior y mapea conflicto sin filtrar
 test('HU-006 HTTP: mapea errores de negocio y contrato sin filtrar detalles internos', async () => {
   const casos: Array<[string, number]> = [
     ['PT604', 409], ['PT605', 409], ['PT611', 409], ['PT612', 422], ['PT613', 409],
+    ['PT624', 422], ['PT625', 422],
     ['PT615', 422], ['PT617', 422], ['PT618', 409], ['PT620', 422], ['PT621', 422], ['PT622', 400],
     ['22P02', 400], ['22003', 422], ['PGRST202', 503], ['XX000', 500]
   ];

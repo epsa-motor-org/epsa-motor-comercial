@@ -19,7 +19,7 @@ function responderErrorApoyo(res: Response, error: unknown) {
   const { code, message } = (error ?? {}) as { code?: string; message?: string };
   if (code === '42501') return res.status(403).json({ ok: false, message: 'No tienes permisos para separar motos' });
   if (code === 'PT404') return res.status(404).json({ ok: false, message: 'No se encontró la moto' });
-  if (code === 'PT438') return res.status(409).json({ ok: false, message: 'La elección de techo no es compatible con el techo instalado o configurado en esta unidad' });
+  if (code === 'PT438') return res.status(409).json({ ok: false, message: 'La elección de techo no es compatible con el techo instalado en esta unidad' });
   if (code === 'PT439') return res.status(422).json({ ok: false, message: 'El tipo de techo no existe o está inactivo' });
   if (code === 'PT440') return res.status(409).json({ ok: false, message: 'La elección de techo ya está guardada y no se puede modificar' });
   if (code === 'PT409') return res.status(409).json({
