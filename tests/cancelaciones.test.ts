@@ -167,7 +167,19 @@ test('HU-021 HTTP: valida UUID, operación y body antes de llamar a la RPC', asy
     assert.equal(sinToken.status, 401);
     assert.equal((await request(base, path, 'auxiliar')).status, 403);
     assert.equal((await request(base, path, 'vendedor', { motivo: '' })).status, 400);
-    assert.equal((await request(base, path, 'vendedor', { motivo: 'válido', codusu: 3 })).status, 400);
+    for (const [ruta, campo] of [
+      ['/api/separaciones/71/cancelacion', 'codusuresp'],
+      ['/api/separaciones/71/cancelacion', 'codusuResponsable'],
+      ['/api/separaciones/71/cancelacion', 'codusu'],
+      ['/api/separaciones/71/cancelacion', 'codusuAutor'],
+      ['/api/ventas/82/cancelacion', 'codusuresp'],
+      ['/api/ventas/82/cancelacion', 'codusuResponsable'],
+      ['/api/ventas/82/cancelacion', 'codusu'],
+      ['/api/ventas/82/cancelacion', 'codusuAutor']
+    ] as const) {
+      assert.equal((await request(base, ruta, 'vendedor', { motivo: 'válido', [campo]: 3 })).status, 400,
+        `${ruta} debe rechazar ${campo}`);
+    }
     assert.equal((await request(base, '/api/ventas/no-es-id/cancelacion')).status, 400);
     assert.equal((await request(base, path, 'vendedor', { motivo: 'válido' }, 'no-uuid')).status, 400);
     assert.equal(llamadas.length, 0);
