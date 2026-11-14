@@ -112,6 +112,7 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   await db.exec(leer('supabase/migrations/202611130003_hu022_estado_unidad_movimiento_activo.sql'));
   await db.exec(leer('supabase/migrations/202611140001_hu005_techo_solo_instalado.sql'));
   await db.exec(leer('supabase/migrations/202611140002_hu006_descuento_comercial.sql'));
+  await db.exec(leer('supabase/migrations/202611140003_hu021_cancelacion_estado_e_inmutabilidad.sql'));
   await db.exec(`INSERT INTO auth.users(id) VALUES ${UUIDS.map(id => `('${id}')`).join(',')};
     INSERT INTO public.rol(nomrol,estrol) VALUES ('Gerente',true),('Administradora',true),('Vendedor',true);
     INSERT INTO public.usuario(uuidusu,codrol,nomusu,apepatusu,corusu,estusu)
@@ -139,11 +140,11 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     "SELECT coduni::text FROM public.unidad WHERE nummotuni LIKE 'TC-M-%' ORDER BY coduni")).rows.map(r => r.coduni));
   const compraHu022 = await propietario(async () => {
     const nuevo = await db.query<{ codcom: string }>(
-      "INSERT INTO public.compra(codmod,codusu,colcom,cancom) VALUES (1,1,'Azul',24) RETURNING codcom::text");
+      "INSERT INTO public.compra(codmod,codusu,colcom,cancom) VALUES (1,1,'Azul',25) RETURNING codcom::text");
     const codcomHu022 = nuevo.rows[0]!.codcom;
-    await db.query("INSERT INTO public.factura_compra(codcom,emisor,numero,fecha_emision,cantidad_motos,codusu) VALUES ($1,'QA','HU022-FAC-1','2026-11-13',24,1)", [codcomHu022]);
+    await db.query("INSERT INTO public.factura_compra(codcom,emisor,numero,fecha_emision,cantidad_motos,codusu) VALUES ($1,'QA','HU022-FAC-1','2026-11-13',25,1)", [codcomHu022]);
     await db.query(`INSERT INTO public.unidad(codcom,codmod,nummotuni,chauni,coluni,estcomuni)
-      SELECT $1,1,'H022-M-' || n,'H022-C-' || n,'Azul','Disponible' FROM generate_series(1,24) n`, [codcomHu022]);
+      SELECT $1,1,'H022-M-' || n,'H022-C-' || n,'Azul','Disponible' FROM generate_series(1,25) n`, [codcomHu022]);
     return codcomHu022;
   });
   const unidadesHu022 = await propietario(async () => (await db.query<{ coduni: string }>(
@@ -407,25 +408,37 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     assert.deepEqual([filaLista?.comprador.codcli,filaLista?.unidad.coduni], ['2',u[11]]);
   });
 
-  await t.test('HU-022: cambio de unidad solamente libera coherentemente la anterior y conserva snapshots físicos/comerciales', async () => {
+  await t.test('HU-022/HU-021: venta corregida sigue registrada y su responsable puede cancelarla sin tocar historiales ni finanzas', async () => {
     await login(3);
-    const ventaBase = await venta(u[12]!, { decision: 'Sin techo' }, null, randomUUID(), {
+    await separar(u[12]!, 'Sin techo');
+    const rutaEvidencia = `ventas/${u[12]}/hu022-hu021-pago.pdf`;
+    await propietario(() => db.query(
+      "INSERT INTO storage.objects(bucket_id,name,owner) VALUES ('ventas-evidencia',$1,$2)", [rutaEvidencia, UUIDS[2]]));
+    const ventaBase = await venta(u[12]!, null, null, randomUUID(), {
       monto: 500, motivo: 'Descuento autorizado por llamada', autorizador: 1, confirmacion: true
     });
     await propietario(() => db.query(`INSERT INTO public.pagoventa(
-      codven,nropagven,codusuautorpag,montopagven,fecpagven,metpagven,obspagven,ingconfpag,codusuconfpag,fecconfpag
-    ) VALUES ($1,1,3,25,$2,'Efectivo','Pago HU-022',true,3,now())`, [ventaBase.codven,hoy]));
-    const finanzasAntes = await propietario(() => escalar<Record<string, unknown>>(
-      `SELECT jsonb_build_object('impven',impven,'prebaseven',prebaseven,'adicionalrefven',adicionalrefven,
-        'adicionalacordadoven',adicionalacordadoven,'descuento',descuentoven,'motivo',motivodescuentoven,
-        'autorizador',codusuautorizadesc::text,'confirmacion',conftelefonicadesc,
-        'fechaConfirmacion',fecconftelefonicadesc IS NOT NULL,
-        'pagos',(SELECT count(*)::int FROM pagoventa WHERE codven=venta.codven),
-        'totalPagos',(SELECT COALESCE(sum(montopagven),0) FROM pagoventa WHERE codven=venta.codven)) r
-       FROM public.venta WHERE codven=$1`, [ventaBase.codven]));
-    assert.deepEqual(finanzasAntes, { impven: 17835, prebaseven: 18335, adicionalrefven: 0,
-      adicionalacordadoven: 0, descuento: 500, motivo: 'Descuento autorizado por llamada',
-      autorizador: '1', confirmacion: true, fechaConfirmacion: true, pagos: 1, totalPagos: 25 });
+      codven,nropagven,codusuautorpag,montopagven,fecpagven,metpagven,refpagven,rutavoucherven,
+      obspagven,ingconfpag,codusuconfpag,fecconfpag
+    ) VALUES ($1,1,3,25,$2,'Transferencia','OP-HU022-HU021', $3,'Pago HU-022',true,1,now())`,
+      [ventaBase.codven,hoy,rutaEvidencia]));
+    const finanzasSnapshot = () => propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('impven',v.impven,'prebaseven',v.prebaseven,'adicionalrefven',v.adicionalrefven,
+        'adicionalacordadoven',v.adicionalacordadoven,'descuento',v.descuentoven,'motivo',v.motivodescuentoven,
+        'autorizador',v.codusuautorizadesc::text,'confirmacion',v.conftelefonicadesc,
+        'fechaConfirmacion',v.fecconftelefonicadesc,
+        'separacion',jsonb_build_object('codsep',s.codsep::text,'estado',s.estsep,'adelanto',s.monadesep,
+          'confirmado',s.ingconfsep,'evidencia',s.rutavouchersep),
+        'pagos',(SELECT COALESCE(jsonb_agg(pg_catalog.to_jsonb(p)-'codven' ORDER BY p.nropagven),'[]'::jsonb)
+          FROM public.pagoventa p WHERE p.codven=v.codven)) r
+       FROM public.venta v JOIN public.separacion s ON s.codsep=v.codsep WHERE v.codven=$1`, [ventaBase.codven]));
+    const finanzasAntes = await finanzasSnapshot();
+    assert.deepEqual([finanzasAntes.impven,finanzasAntes.prebaseven,finanzasAntes.adicionalrefven,
+      finanzasAntes.adicionalacordadoven,finanzasAntes.descuento], [17835,18335,0,0,500]);
+    const estadoAntes = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('estado',estven,'responsable',codusuresp::text,'unidad',coduni::text) r FROM public.venta WHERE codven=$1",
+      [ventaBase.codven]));
+    assert.deepEqual(estadoAntes, { estado: 'Registrada', responsable: '3', unidad: u[12] });
     const fisicoOrigenAntes = await propietario(() => escalar<Record<string, unknown>>(
       "SELECT jsonb_build_object('codtte',codtte,'coluni',coluni,'codpro',codpro,'codepr',codepr,'codubi',codubi) r FROM public.unidad WHERE coduni=$1", [u[12]]));
     const fisicoDestinoAntes = await propietario(() => escalar<Record<string, unknown>>(
@@ -436,27 +449,49 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     assert.deepEqual([operacion.coduniAnterior, operacion.coduniNueva], [u[12], u[13]]);
     assert.equal(await estadoUnidad(u[12]!), 'Disponible');
     assert.equal(await estadoUnidad(u[13]!), 'Vendida');
-    const finanzasDespues = await propietario(() => escalar<Record<string, unknown>>(
-      `SELECT jsonb_build_object('impven',impven,'prebaseven',prebaseven,'adicionalrefven',adicionalrefven,
-        'adicionalacordadoven',adicionalacordadoven,'descuento',descuentoven,'motivo',motivodescuentoven,
-        'autorizador',codusuautorizadesc::text,'confirmacion',conftelefonicadesc,
-        'fechaConfirmacion',fecconftelefonicadesc IS NOT NULL,
-        'pagos',(SELECT count(*)::int FROM pagoventa WHERE codven=venta.codven),
-        'totalPagos',(SELECT COALESCE(sum(montopagven),0) FROM pagoventa WHERE codven=venta.codven)) r
-       FROM public.venta WHERE codven=$1`, [ventaBase.codven]));
+    const finanzasDespues = await finanzasSnapshot();
+    assert.deepEqual(finanzasDespues, finanzasAntes);
     const fisicoOrigenDespues = await propietario(() => escalar<Record<string, unknown>>(
       "SELECT jsonb_build_object('codtte',codtte,'coluni',coluni,'codpro',codpro,'codepr',codepr,'codubi',codubi) r FROM public.unidad WHERE coduni=$1", [u[12]]));
     const fisicoDestinoDespues = await propietario(() => escalar<Record<string, unknown>>(
       "SELECT jsonb_build_object('codtte',codtte,'coluni',coluni,'codpro',codpro,'codepr',codepr,'codubi',codubi) r FROM public.unidad WHERE coduni=$1", [u[13]]));
-    assert.deepEqual(finanzasDespues, finanzasAntes);
     assert.deepEqual(fisicoOrigenDespues, fisicoOrigenAntes);
     assert.deepEqual(fisicoDestinoDespues, fisicoDestinoAntes);
-    await login(1);
-    await cancelarVenta(String(ventaBase.codven), 'Prueba de cancelación posterior a HU-022', 'Conservar pago para conciliación');
+    const estadoDespuesCorreccion = await propietario(() => escalar<Record<string, unknown>>(
+      "SELECT jsonb_build_object('estado',estven,'responsable',codusuresp::text,'unidad',coduni::text) r FROM public.venta WHERE codven=$1",
+      [ventaBase.codven]));
+    assert.deepEqual(estadoDespuesCorreccion, { estado: 'Registrada', responsable: '3', unidad: u[13] });
+    const correccionesAntesCancelacion = await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu022_correccion_relacion_detalle WHERE codven=$1', [ventaBase.codven]));
+    const cancelacionesAntesCancelacion = await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.historialcancelacion WHERE codven=$1', [ventaBase.codven]));
+    assert.equal(correccionesAntesCancelacion, 1);
+    assert.equal(cancelacionesAntesCancelacion, 0);
+
+    await login(3);
+    const resultadoCancelacion = await cancelarVenta(String(ventaBase.codven),
+      'Prueba de cancelación posterior a HU-022', 'Conservar adelanto y pago para conciliación');
+    assert.equal(resultadoCancelacion.cancelador, '3', 'el responsable vigente puede cancelar la venta corregida');
+    assert.equal((await propietario(() => escalar<string>(
+      'SELECT estven r FROM public.venta WHERE codven=$1', [ventaBase.codven]))), 'Cancelada');
+    assert.deepEqual(await finanzasSnapshot(), finanzasAntes,
+      'HU-021 conserva snapshots, adelanto, pago y evidencia de la venta ya corregida');
     assert.equal(await escalar('SELECT public.hu006_venta_de_unidad($1) r', [u[13]]), null);
     const cancelacionesDestino = await escalar<Array<{ codOperacion: string }>>('SELECT public.hu021_cancelaciones_unidad($1) r', [u[13]]);
     assert.equal(cancelacionesDestino.length, 1);
     assert.equal((await escalar('SELECT public.hu021_cancelaciones_unidad($1) r', [u[12]]) as unknown[]).length, 0);
+
+    const versionActual = Number(operacion.versionRelacion);
+    await login(1);
+    await assert.rejects(corregirRelacion(String(ventaBase.codven), null, u[12]!, versionActual,
+      'Intento posterior a cancelación'), error('PT689'));
+    const correccionesDespues = await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu022_correccion_relacion_detalle WHERE codven=$1', [ventaBase.codven]));
+    const cancelacionesDespues = await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.historialcancelacion WHERE codven=$1', [ventaBase.codven]));
+    assert.deepEqual([correccionesDespues,cancelacionesDespues], [correccionesAntesCancelacion,1],
+      'HU-021 no altera el historial HU-022 y una HU-022 rechazada no altera HU-021');
+
     await login(3);
     const ventaNueva = await venta(u[12]!, { decision: 'Por definir' });
     await login(2);
@@ -465,11 +500,12 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   });
 
   await t.test('HU-022: Gerente confirma comprador + unidad con separación Convertida y conserva su adelanto histórico', async () => {
+    const unidadConversion = unidadesHu022[24]!;
     await login(3);
-    await separar(u[12]!, 'Por definir');
-    const ventaBase = await venta(u[12]!, null);
+    await separar(unidadConversion, 'Por definir');
+    const ventaBase = await venta(unidadConversion, null);
     const separacion = await propietario(() => escalar<Record<string, unknown>>(
-      "SELECT jsonb_build_object('codsep',codsep::text,'codcli',codcli::text,'coduni',coduni::text,'estsep',estsep,'monadesep',monadesep) r FROM public.separacion WHERE coduni=$1", [u[12]]));
+      "SELECT jsonb_build_object('codsep',codsep::text,'codcli',codcli::text,'coduni',coduni::text,'estsep',estsep,'monadesep',monadesep) r FROM public.separacion WHERE coduni=$1", [unidadConversion]));
     await login(2);
     await assert.rejects(corregirRelacion(String(ventaBase.codven), '2', null, 1), error('PT686'));
     await login(1);
@@ -477,11 +513,11 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     assert.equal((corregida.operaciones as Array<Record<string, unknown>>)[0]!.codsepVinculada, separacion.codsep);
     const resultado = await propietario(() => escalar<Record<string, unknown>>(
       "SELECT jsonb_build_object('codcli',codcli::text,'coduni',coduni::text,'codsep',codsep::text,'impven',impven) r FROM public.venta WHERE codven=$1", [ventaBase.codven]));
-    assert.deepEqual([resultado.codcli,resultado.coduni,resultado.codsep], ['2',u[12],separacion.codsep]);
+    assert.deepEqual([resultado.codcli,resultado.coduni,resultado.codsep], ['2',unidadConversion,separacion.codsep]);
     const separacionFinal = await propietario(() => escalar<Record<string, unknown>>(
       "SELECT jsonb_build_object('codcli',codcli::text,'coduni',coduni::text,'estsep',estsep,'monadesep',monadesep) r FROM public.separacion WHERE codsep=$1", [separacion.codsep]));
-    assert.deepEqual(separacionFinal, { codcli: '1', coduni: u[12], estsep: 'Convertida', monadesep: separacion.monadesep });
-    assert.equal(Number((await escalar<Record<string, unknown>>('SELECT public.hu006_venta_de_unidad($1) r', [u[12]])).totalRecibido), 100);
+    assert.deepEqual(separacionFinal, { codcli: '1', coduni: unidadConversion, estsep: 'Convertida', monadesep: separacion.monadesep });
+    assert.equal(Number((await escalar<Record<string, unknown>>('SELECT public.hu006_venta_de_unidad($1) r', [unidadConversion])).totalRecibido), 100);
   });
 
   await t.test('HU-022: cambio simultáneo de comprador y unidad conserva la venta y descarta compromisos cancelados', async () => {

@@ -256,6 +256,21 @@ test('HU-006 HTTP: resolver techo usa solo la RPC de venta y decisiones finales 
   ? { data: { codven: '50', decision: 'Sin techo', codtte: null, guardado: true, reutilizada: false }, error: null }
   : null));
 
+test('HU-021/HU-006 HTTP: PT623 de una venta cancelada responde 409 al intentar cambiar el techo', async () => {
+  await entorno(async (base, llamadas) => {
+    const r = await respuesta(fetch(`${base}/api/ventas/50/techo`, {
+      method: 'PUT', headers: { Authorization: 'Bearer vendedor', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'Sin techo' })
+    }));
+    assert.equal(r.status, 409);
+    assert.equal(llamadas.length, 1);
+    assert.equal(llamadas[0]!.nombre, 'hu006_guardar_techo_venta');
+    assert.ok(!JSON.stringify(r.body).includes('detalle SQL privado'));
+  }, nombre => nombre === 'hu006_guardar_techo_venta'
+    ? { data: null, error: { code: 'PT623', message: 'detalle SQL privado', details: 'privado', hint: 'secreto' } }
+    : null);
+});
+
 test('HU-006 HTTP: registra posteriormente el comprobante por la RPC y admite los tres roles', async () => entorno(async (base, llamadas) => {
   for (const token of ['gerente', 'admin', 'vendedor']) {
     const r = await respuesta(fetch(`${base}/api/ventas/50/comprobante`, {
