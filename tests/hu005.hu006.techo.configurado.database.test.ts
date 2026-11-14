@@ -113,6 +113,9 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   await db.exec(leer('supabase/migrations/202611140001_hu005_techo_solo_instalado.sql'));
   await db.exec(leer('supabase/migrations/202611140002_hu006_descuento_comercial.sql'));
   await db.exec(leer('supabase/migrations/202611140003_hu021_cancelacion_estado_e_inmutabilidad.sql'));
+  // HU-022 con la regla del techo instalado e historial con nombres (se puede volver a ejecutar)
+  await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
+  await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
   await db.exec(`INSERT INTO auth.users(id) VALUES ${UUIDS.map(id => `('${id}')`).join(',')};
     INSERT INTO public.rol(nomrol,estrol) VALUES ('Gerente',true),('Administradora',true),('Vendedor',true);
     INSERT INTO public.usuario(uuidusu,codrol,nomusu,apepatusu,corusu,estusu)
@@ -625,7 +628,67 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     await login(3);
     const ventaTecho = await venta(extra[5]!, { decision: 'Sin techo' });
     await login(1);
-    await assert.rejects(corregirRelacion(String(ventaTecho.codven), null, extra[4]!, 1), error('PT693'));
+    // Techo instalado distinto del acuerdo: bloquea con el mismo código de separación y venta (202611140004)
+    await assert.rejects(corregirRelacion(String(ventaTecho.codven), null, extra[4]!, 1), error('PT438'));
+  });
+
+  await t.test('HU-006: una venta anterior al descuento (NULL) resuelve su techo con descuento 0; cancelada responde PT623', async () => {
+    const libre = await propietario(async () => {
+      const c = (await db.query<{ codcom: string }>("INSERT INTO public.compra(codmod,codusu,colcom,cancom) VALUES (1,1,'Azul',1) RETURNING codcom::text")).rows[0]!.codcom;
+      await db.query("INSERT INTO public.factura_compra(codcom,emisor,numero,fecha_emision,cantidad_motos,codusu) VALUES ($1,'QA','HU006-HIST','2026-11-13',1,1)", [c]);
+      return (await db.query<{ coduni: string }>(`INSERT INTO public.unidad(codcom,codmod,nummotuni,chauni,coluni,estcomuni)
+        VALUES ($1,1,'H006-HIST-M','H006-HIST-C','Azul','Disponible') RETURNING coduni::text`, [c])).rows[0]!.coduni;
+    });
+    await login(3);
+    const hist = await venta(libre, { decision: 'Por definir' });
+    // Así quedaron las ventas registradas antes de 202611140002
+    await propietario(() => db.query('UPDATE public.venta SET descuentoven=NULL, conftelefonicadesc=NULL WHERE codven=$1', [hist.codven]));
+    const r = await escalar<Record<string, unknown>>('SELECT public.hu006_guardar_techo_venta($1,$2,$3,$4) r', [hist.codven, 'Con techo', tipo['Lona'], 200]);
+    assert.equal(Number(r.importe), 18535);
+    const fila = await propietario(async () => (await db.query<{ impven: string; descuentoven: string | null; dectechoven: string }>(
+      'SELECT impven::text,descuentoven::text,dectechoven FROM public.venta WHERE codven=$1', [hist.codven])).rows[0]!);
+    assert.deepEqual(fila, { impven: '18535.00', descuentoven: null, dectechoven: 'Con techo' });
+    await login(1);
+    await cancelarVenta(String(hist.codven), 'Prueba de venta cancelada');
+    await assert.rejects(escalar('SELECT public.hu006_guardar_techo_venta($1,$2,$3,$4) r', [hist.codven, 'Con techo', tipo['Lona'], 200]), error('PT623'));
+    await assert.rejects(escalar('SELECT public.hu006_guardar_techo_venta($1,$2,$3,$4) r', [hist.codven, 'Sin techo', null, null]), error('PT623'));
+  });
+
+  await t.test('HU-022: un techo solo configurado en la moto destino no bloquea y el historial trae nombres', async () => {
+    const extra = unidadesHu022;
+    await propietario(async () => {
+      await db.query('UPDATE public.unidad SET codtte=$2 WHERE coduni=$1', [extra[16], tipo['Lona']]);
+      await db.query("UPDATE public.preparacionunidad SET esttecho='Pendiente' WHERE coduni=$1", [extra[16]]);
+    });
+    await login(3);
+    const ventaSin = await venta(extra[15]!, { decision: 'Sin techo' });
+    await login(2);
+    const r = await corregirRelacion(String(ventaSin.codven), null, extra[16]!, 1, 'Se registró la moto equivocada');
+    assert.equal((r.operaciones as Array<Record<string, unknown>>)[0]!.coduniNueva, extra[16]);
+    assert.equal(await estadoUnidad(extra[15]!), 'Disponible');
+    assert.equal(await estadoUnidad(extra[16]!), 'Vendida');
+    // La configuración de techo de la moto no cambia: la diferencia se corrige en la ficha
+    assert.equal(await propietario(() => escalar<string>('SELECT codtte::text r FROM public.unidad WHERE coduni=$1', [extra[16]])), tipo['Lona']);
+
+    type Evento = { actor: { nombre: string }; unidadAnterior: { motor: string; coduni: string }; unidadNueva: { motor: string; chasis: string };
+      compradorAnterior: { nombre: string }; compradorNuevo: { nombre: string }; otrasVentas: string[]; tipo: string; motivo: string };
+    const porVenta = await escalar<Evento[]>('SELECT public.hu022_correcciones_detalle($1, NULL) r', [ventaSin.codven]);
+    assert.equal(porVenta.length, 1);
+    assert.equal(porVenta[0]!.tipo, 'Individual');
+    assert.equal(porVenta[0]!.motivo, 'Se registró la moto equivocada');
+    assert.equal(porVenta[0]!.actor.nombre, 'Admin QA');
+    assert.equal(porVenta[0]!.unidadAnterior.motor, 'H022-M-16');
+    assert.deepEqual([porVenta[0]!.unidadNueva.motor, porVenta[0]!.unidadNueva.chasis], ['H022-M-17', 'H022-C-17']);
+    assert.ok(porVenta[0]!.compradorAnterior.nombre);
+    assert.equal(porVenta[0]!.compradorNuevo.nombre, porVenta[0]!.compradorAnterior.nombre);
+    assert.deepEqual(porVenta[0]!.otrasVentas, []);
+    // Por moto: la de origen y la de destino ven el mismo evento
+    assert.equal((await escalar<Evento[]>('SELECT public.hu022_correcciones_detalle(NULL, $1) r', [extra[15]])).length, 1);
+    assert.equal((await escalar<Evento[]>('SELECT public.hu022_correcciones_detalle(NULL, $1) r', [extra[16]])).length, 1);
+    await assert.rejects(escalar('SELECT public.hu022_correcciones_detalle(NULL, NULL) r'), error('PT681'));
+    await login(3);
+    await assert.rejects(escalar('SELECT public.hu022_correcciones_detalle($1, NULL) r', [ventaSin.codven]), error('42501'));
+    await login(1);
   });
 
   await t.test('HU-022: un destino configurado Sin techo sigue compatible con una venta Con techo', async () => {

@@ -8,8 +8,11 @@
 // Desglose (contrato de Michelle del 12 de noviembre): precio base (lista del modelo, no se escribe) + adicional del
 // techo (el referencial del tipo, o el que se acordó con el comprador) = total, que calcula el servidor. Los números
 // cuadran a la vista: total − adelanto − pagos = saldo. «Sin techo» suma 0; «Por definir» no suma hasta elegirlo.
-// Una moto con techo configurado o instalado solo se vende con ese techo (o por definir). El servidor vuelve a
-// validar todo; si otra persona vendió o separó la moto antes, no se guarda nada y se avisa (409).
+// Descuento comercial (HU-006, escenarios 14 a 19): monto, motivo, quién lo autorizó (gerente o administradora) y la
+// confirmación telefónica; el total neto y el saldo los recalcula el servidor.
+// Una moto con techo instalado solo se vende con ese techo (o por definir); un techo solo configurado no lo impide y
+// se muestra la diferencia (regla del PO del 13/11). El servidor vuelve a validar todo; si otra persona vendió o separó
+// la moto antes, no se guarda nada y se avisa (409).
 // La venta no mueve la moto, no confirma llegada, preparación ni entrega y no emite comprobantes: si ya se emitió la
 // boleta o factura fuera de la plataforma, se registra su serie, número y fecha reales.
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -23,6 +26,7 @@ import { Aviso, Campo, Card, Modal, useToast } from "../ui";
 import { IconCheck } from "../Icons";
 import { BuscarInteresado, CabeceraMoto, ElegirTechoModal, Opcion, VistaCaptura } from "./SepararCentral";
 import { BotonCancelar, NotaPermisoCancelar } from "./CancelarCentral";
+import { BotonCorregir } from "./CorregirCentral";
 import { VENTA } from "../../servicios/cancelacionCentral";
 
 const NO_CONFIRMADO = "No se pudo confirmar si la venta se guardó porque falló la conexión. Vuelve a pulsar «Registrar venta»: este mismo envío no se registrará dos veces.";
@@ -41,8 +45,9 @@ function Fila({ k, children, tono = "", data }) {
   return <div className="grid gap-1 py-2 sm:grid-cols-[12rem_1fr]" data-fila={data || k}><dt className="text-slate-500">{k}</dt><dd className={`font-semibold ${tono || "text-marino dark:text-white"}`}>{children}</dd></div>;
 }
 
-// Cuentas de la venta: siempre visibles mientras se llena el formulario (base + techo = total; total − recibido = saldo)
-export function Cuentas({ precio, decision, techoNombre, adicional, total, adelanto, pagos, saldo, modalidad }) {
+// Cuentas de la venta: siempre visibles mientras se llena el formulario
+// (base + techo = importe; importe − descuento = total; total − recibido = saldo)
+export function Cuentas({ precio, decision, techoNombre, adicional, antes, descuento = 0, total, adelanto, pagos, saldo, modalidad }) {
   const techo = decision === S.CON_TECHO
     ? [S.rotuloTecho(techoNombre), Number.isFinite(adicional) ? `+ ${S.soles(adicional)}` : "—"]
     : decision === S.SIN_TECHO ? ["Sin techo", `+ ${S.soles(0)}`] : ["Techo por definir", "Se suma al elegirlo"];
@@ -54,6 +59,12 @@ export function Cuentas({ precio, decision, techoNombre, adicional, total, adela
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-[13.5px] dark:border-white/10 dark:bg-white/5" data-cuentas>
       <dl className="space-y-1.5">
         {filas.map(([k, v, d]) => <div key={d} className="flex items-baseline justify-between gap-3" data-cuenta={d}><dt className="text-slate-500">{k}</dt><dd className="cifra font-semibold text-marino dark:text-white">{v}</dd></div>)}
+        {descuento > 0 && (
+          <>
+            <div className="flex items-baseline justify-between gap-3 border-t border-slate-200 pt-2 dark:border-white/10" data-cuenta="antes" data-antes={antes ?? ""}><dt className="text-slate-500">Importe antes del descuento</dt><dd className="cifra font-semibold text-marino dark:text-white">{typeof antes === "number" ? S.soles(antes) : "—"}</dd></div>
+            <div className="flex items-baseline justify-between gap-3" data-cuenta="descuento" data-descuento={descuento}><dt className="text-slate-500">Descuento autorizado</dt><dd className="cifra font-semibold text-marino dark:text-white">− {S.soles(descuento)}</dd></div>
+          </>
+        )}
         <div className="flex items-baseline justify-between gap-3 border-t border-slate-200 pt-2 dark:border-white/10" data-cuenta="total" data-total={total ?? ""}><dt className="font-semibold text-marino dark:text-white">Total de la venta</dt><dd className="cifra font-bold text-marino dark:text-white">{total !== null && total !== undefined ? S.soles(total) : "—"}</dd></div>
         {adelanto > 0 && <div className="flex items-baseline justify-between gap-3" data-cuenta="adelanto"><dt className="text-slate-500">Adelanto de la separación</dt><dd className="cifra font-semibold text-marino dark:text-white">− {S.soles(adelanto)}</dd></div>}
         <div className="flex items-baseline justify-between gap-3" data-cuenta="pagos"><dt className="text-slate-500">Pagos que se registran</dt><dd className="cifra font-semibold text-marino dark:text-white">{pagos > 0 ? `− ${S.soles(pagos)}` : S.soles(0)}</dd></div>
@@ -82,6 +93,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
   const [pagos, setPagos] = useState([]);
   const [evidencias, setEvidencias] = useState({}); // id del pago → { firma, ruta } ya guardada
   const [comp, setComp] = useState({ tiene: false, referencia: "", fecha: "" });
+  const [desc, setDesc] = useState(V.DESCUENTO_VACIO);
   const [err, setErr] = useState({}); const [tocados, setTocados] = useState({}); const [intentado, setIntentado] = useState(false);
   const [enviando, setEnviando] = useState(""); const [bloqueada, setBloqueada] = useState(false);
   const [revisando, setRevisando] = useState(false); const [hecho, setHecho] = useState(null); const [eligiendoTecho, setEligiendoTecho] = useState(false);
@@ -104,7 +116,8 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
         const ini = S.decisionInicial(tipos, unidad?.preparacion?.techo?.configuracion || "");
         setDecision(ini.decision); setCodtteCon(ini.codtte);
         if (ini.decision === S.CON_TECHO) tipoIni = tipos.find((t) => t.codtte === ini.codtte) || null;
-        // Con un techo configurado o instalado, ese techo es el único que se puede vender (además de «Por definir»)
+        // Con un techo instalado, ese techo es el único que se puede vender (además de «Por definir»). Un techo solo
+        // configurado se propone, pero el comprador puede elegir otro (regla del PO del 13/11)
         const fijo = S.techoDeLaMoto(unidad, tipos);
         const tipoFijo = fijo ? S.tiposConTecho(tipos).find((t) => t.codtte === fijo.codtte) : null;
         if (tipoFijo) { setDecision(S.CON_TECHO); setCodtteCon(tipoFijo.codtte); tipoIni = tipoFijo; }
@@ -139,9 +152,17 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
   // Desglose: base + adicional = total (el servidor lo vuelve a calcular)
   const nAdicional = decisionFinal === S.CON_TECHO ? S.leerMonto(v.adicional) : 0;
   const adicionalValido = decisionFinal !== S.CON_TECHO || (!V.errorAdicional(v.adicional, referencial) && Number.isFinite(nAdicional));
-  const { total, saldo } = V.cuentasVenta({ base: precio, adicional: adicionalValido ? nAdicional : NaN, adelanto, pagos: totalPagos });
-  const totalVista = adicionalValido ? total : null;
-  const saldoVista = adicionalValido ? saldo : null;
+  // Descuento autorizado por llamada (se resta del importe; no es un pago ni un adelanto)
+  const autorizadores = V.autorizadoresDescuento(form);
+  const antesVista = adicionalValido ? V.cuentasVenta({ base: precio, adicional: nAdicional }).antes : null;
+  const nDesc = desc.tiene ? S.leerMonto(desc.monto) : 0;
+  const descValido = !desc.tiene || !V.errorMontoDescuento(desc.monto, antesVista ?? undefined);
+  const descVista = desc.tiene && descValido ? nDesc : 0;
+  const { total, saldo } = V.cuentasVenta({ base: precio, adicional: adicionalValido ? nAdicional : NaN, descuento: descVista, adelanto, pagos: totalPagos });
+  const totalVista = adicionalValido && descValido ? total : null;
+  const saldoVista = adicionalValido && descValido ? saldo : null;
+  // Techo solo configurado (sin instalar) distinto de lo elegido: se puede vender así, pero queda a la vista
+  const difCfg = conversion ? "" : S.diferenciaConfigurado(S.techoConfiguradoDe(unidad, form?.tiposTecho || []), decision, tipoTecho);
   const disponiblePara = (id) => (totalVista !== null ? V.redondear(totalVista - adelanto - pagos.filter((p) => p.id !== id).reduce((a, p) => a + valor(p.monto), 0)) : undefined);
   const elegirTipo = (codtte) => { setCodtteCon(codtte); const t = tiposCon.find((x) => x.codtte === codtte); setV((p) => ({ ...p, adicional: S.adicionalDe(t) !== null ? montoTexto(S.adicionalDe(t)) : "" })); setErr((p) => ({ ...p, techo: undefined, adicional: undefined })); };
   const gerentes = form?.gerentes || [];
@@ -152,6 +173,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
 
   const tocar = (k) => setTocados((p) => (p[k] ? p : { ...p, [k]: true }));
   const cambiarV = (k, val) => { setV((p) => ({ ...p, [k]: val })); tocar(k); setErr((e) => ({ ...e, [k]: undefined, general: undefined })); };
+  const cambiarDesc = (k, val, campo) => { setDesc((p) => ({ ...p, [k]: val })); if (campo) tocar(campo); setErr((e) => ({ ...e, [campo]: undefined, descuento: undefined, general: undefined })); };
   const cambiarNuevo = (k, val) => { setNuevo((p) => ({ ...p, [k]: val })); tocar(`c_${k}`); setErr((e) => ({ ...e, [`c_${k}`]: undefined, comprador: undefined })); };
   // Al cambiar el medio de un pago se borran los avisos del medio anterior
   const cambiarPago = (id, k, val) => {
@@ -208,6 +230,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
         if (!p.confirmado) e[k("confirmado")] = "Confirma que recibiste el dinero en efectivo.";
       }
     });
+    Object.assign(e, V.erroresDescuento(desc, { antes: antesVista ?? undefined, recibido: adelanto + totalPagos, autorizadores }));
     const eObs = V.errorTextoLibre(v.observacion, V.MAX_OBS_VENTA);
     if (eObs) e.observacion = eObs;
     if (comp.tiene) {
@@ -279,6 +302,8 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
         modalidad: v.modalidad,
         // El total no se envía: el servidor suma el precio base y el adicional acordado del techo
         ...(decisionFinal === S.CON_TECHO ? { adicionalTechoAcordado: S.montoParaEnviar(v.adicional) } : {}),
+        // Descuento: solo si se acordó; el servidor lo resta una vez y guarda quién lo autorizó por llamada
+        ...V.descuentoParaEnviar(desc),
         ...(v.sedeEntrega ? { codsedEntregaPrevista: Number(v.sedeEntrega) } : {}),
         pagos: pagos.map((p) => (p.medio === "Transferencia"
           ? { monto: S.montoParaEnviar(p.monto), fecha: p.fecha, medioPago: "Transferencia", referencia: S.limpio(p.referencia), rutaEvidencia: rutas[p.id], observacion: S.limpio(p.observacion) || null, ingresoConfirmado: true, codusuConfirmador: Number(p.confirmador) }
@@ -316,6 +341,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
         setBloqueada(true); onConflicto?.();
         setErr({ general: `${mensajeError(er)}. No se guardó esta venta: la moto cambió antes (otra persona la vendió o la separó, se canceló su separación o ya quedó guardado un intento anterior). Revisa su ficha.` });
       } else if (campo === "adicional") setErr({ adicional: mensajeError(er) });
+      else if (campo === "descuento") setErr({ descuento: mensajeError(er) });
       else if (campo === "techo") setErr({ techo: mensajeError(er) });
       else if (campo === "comprobante") setErr({ compReferencia: mensajeError(er) });
       else if (campo === "responsable") setErr({ responsable: mensajeError(er) });
@@ -352,6 +378,8 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
             <Fila k="Modalidad">{hecho.modalidad}</Fila>
             <Fila k="Precio base" data="base"><span className="cifra">{S.soles(hecho.precioBaseAcordado ?? precio)}</span></Fila>
             <Fila k="Techo" data="adicional">{`${V.textoAdicional(t.decision, techoNombreHecho, Number(hecho.adicionalTechoAcordado), Number(hecho.adicionalTechoReferencial))}${t.decision === S.CON_TECHO ? ` + ${S.soles(hecho.adicionalTechoAcordado)}` : ""}`}</Fila>
+            {Number(hecho.descuento) > 0 && <Fila k="Importe antes del descuento" data="antes"><span className="cifra">{S.soles(hecho.importeAntesDescuento)}</span></Fila>}
+            {Number(hecho.descuento) > 0 && <Fila k="Descuento autorizado" data="descuento"><span className="cifra" data-descuento-guardado={hecho.descuento}>− {S.soles(hecho.descuento)}</span>{hecho.motivoDescuento ? `. Motivo: ${hecho.motivoDescuento}` : ""}<span className="mt-0.5 block text-[12px] font-normal text-slate-500" data-autorizacion-descuento>{V.textoAutorizacion(hecho)}</span></Fila>}
             <Fila k="Total de la venta" data="total"><span className="cifra" data-total-guardado={hecho.importe}>{S.soles(hecho.importe)}</span></Fila>
             {adelanto > 0 && <Fila k="Adelanto de la separación"><span className="cifra">{S.soles(adelanto)}</span>, ya recibido al separar (no se suma otra vez)</Fila>}
             <Fila k="Pagos registrados">{hecho.pagos?.length ? hecho.pagos.map((p) => `${S.soles(p.monto)} en ${String(p.medioPago).toLowerCase()}`).join(", ") : "Ninguno"}</Fila>
@@ -368,7 +396,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
           {t.decision === S.POR_DEFINIR && <Aviso tipo="aviso">El techo quedó por definir. Cuando el comprador decida, regístralo con «Elegir techo» (aquí o en la ficha de la moto): el total y el saldo se recalculan en esta misma venta.</Aviso>}
           {t.decision === S.CON_TECHO && !(instalado && instalado.codtte === String(t.codtte)) && <Aviso tipo="info"><span data-techo-por-programar>El comprador eligió {techoNombreHecho || "un techo"}. La venta no configura ni instala el techo: prográmalo desde «Configuración de techo» en la ficha de la moto.</span></Aviso>}
         </div>
-        {eligiendoTecho && <ElegirTechoModal unidad={unidad} comprador={hecho.comprador} que="venta" venta={{ precioBaseAcordado: hecho.precioBaseAcordado ?? precio, totalRecibido: hecho.totalRecibido }} guardar={(d, tipo, adicional) => V.guardarTechoVentaApi(hecho.codven, d, tipo, adicional)} onClose={() => setEligiendoTecho(false)}
+        {eligiendoTecho && <ElegirTechoModal unidad={unidad} comprador={hecho.comprador} que="venta" venta={{ precioBaseAcordado: hecho.precioBaseAcordado ?? precio, totalRecibido: hecho.totalRecibido, descuento: hecho.descuento }} guardar={(d, tipo, adicional) => V.guardarTechoVentaApi(hecho.codven, d, tipo, adicional)} onClose={() => setEligiendoTecho(false)}
           onGuardado={() => { setEligiendoTecho(false); onHecho?.(); onClose(); }} />}
       </Modal>
     );
@@ -391,7 +419,9 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
             <Fila k="Comprador">{S.textoComprador(comprador)}</Fila>
             <Fila k="Modalidad">{v.modalidad}</Fila>
             <Fila k="Techo">{conversion ? `${S.textoDecision(sep?.decisionTecho)} (de la separación)` : S.textoDecision({ decision, codtte: tipoTecho?.codtte, nombre: tipoTecho?.nombre })}</Fila>
+            {difCfg && <Fila k="Configuración de techo" data="diferencia-revision">{difCfg}</Fila>}
             {decisionFinal === S.CON_TECHO && <Fila k="Adicional del techo" data="adicional-revision">{S.soles(nAdicional)}{typeof referencial === "number" && V.redondear(nAdicional) !== referencial ? `, acordado con el comprador (referencial ${S.soles(referencial)})` : ", referencial del catálogo"}</Fila>}
+            {desc.tiene && <Fila k="Descuento" data="descuento-revision">{`${S.soles(nDesc)}. Motivo: ${S.limpio(desc.motivo)}`}<span className="mt-0.5 block text-[12px] font-normal text-slate-500">{`Autorizado por llamada por ${nombreDe(desc.autorizador)}. Queda registrado que tú confirmaste la llamada; no es una aprobación digital de esa persona.`}</span></Fila>}
             <Fila k="Sede de atención">{nombreSede(v.sedeAtencion)}</Fila>
             <Fila k="Entrega pactada">{[v.entrega ? `Se entregará ${v.entrega}` : "", v.sedeEntrega ? `en ${nombreSede(v.sedeEntrega)}` : ""].filter(Boolean).join(" ") || "Por acordar"}</Fila>
             <Fila k="Fecha de la venta">{fechaLarga(v.fecha)}</Fila>
@@ -400,7 +430,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
             <Fila k="Comprobante">{comp.tiene ? `${comp.referencia}, emitido el ${fechaLarga(comp.fecha)}` : "Sin comprobante todavía"}</Fila>
             {S.limpio(v.observacion) && <Fila k="Observación">{S.limpio(v.observacion)}</Fila>}
           </dl>
-          <Cuentas precio={precio} decision={decisionFinal} techoNombre={nombreTechoFinal} adicional={adicionalValido ? nAdicional : NaN} total={totalVista} adelanto={adelanto} pagos={totalPagos} saldo={saldoVista} modalidad={v.modalidad} />
+          <Cuentas precio={precio} decision={decisionFinal} techoNombre={nombreTechoFinal} adicional={adicionalValido ? nAdicional : NaN} antes={antesVista} descuento={descVista} total={totalVista} adelanto={adelanto} pagos={totalPagos} saldo={saldoVista} modalidad={v.modalidad} />
           <p className="text-[12.5px] text-slate-500">Al registrar, la moto queda vendida para este comprador y deja de figurar libre. La venta no mueve la moto ni confirma su entrega.</p>
           {err.general && <Aviso tipo={bloqueada ? "aviso" : "error"}><span data-error-general>{err.general}</span></Aviso>}
         </div>
@@ -502,8 +532,8 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
                     <legend className="field-label">¿Qué decidió el comprador?</legend>
                     <div className="grid gap-2 sm:grid-cols-3" data-techo-opciones>
                       <Opcion nombre="ven-techo" valor={S.POR_DEFINIR} actual={decision} titulo="Por definir" texto="Aún no decide. Se registra después, desde la ficha." onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined })); }} />
-                      {tipoSin && <Opcion nombre="ven-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `No disponible: esta moto ya tiene un techo ${instalado.instalado ? "instalado" : "configurado"}.` : "Eligió la moto sin techo. No suma al precio."} deshabilitada={Boolean(instalado)} onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined, adicional: undefined })); }} />}
-                      {tiposConOfrecidos.length > 0 && <Opcion nombre="ven-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene ${instalado.instalado ? "instalado" : "configurado"} («${instalado.nombre}»).` : "Eligió un techo: su adicional se suma al total."} onElegir={(x) => { setDecision(x); if (instalado) elegirTipo(instalado.codtte); setErr((p) => ({ ...p, techo: undefined })); }} />}
+                      {tipoSin && <Opcion nombre="ven-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `No disponible: esta moto ya tiene un techo instalado.` : "Eligió la moto sin techo. No suma al precio."} deshabilitada={Boolean(instalado)} onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined, adicional: undefined })); }} />}
+                      {tiposConOfrecidos.length > 0 && <Opcion nombre="ven-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene instalado («${instalado.nombre}»).` : "Eligió un techo: su adicional se suma al total."} onElegir={(x) => { setDecision(x); if (instalado) elegirTipo(instalado.codtte); setErr((p) => ({ ...p, techo: undefined })); }} />}
                     </div>
                   </fieldset>
                   {decision === S.CON_TECHO && (
@@ -517,11 +547,45 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
                 </>
               )}
               {(conversion || decision !== S.CON_TECHO) && ver("techo") && <p className="text-[12px] font-medium text-acento">{ver("techo")}</p>}
+              {difCfg && <Aviso tipo="aviso"><span data-techo-diferencia>{difCfg}</span></Aviso>}
               {decisionFinal === S.CON_TECHO && (conversion || tipoTecho) && (
                 <Campo etiqueta={`Adicional del techo${nombreTechoFinal ? ` ${nombreTechoFinal}` : ""} (S/)`} error={ver("adicional")} ayuda={V.ayudaAdicional(referencial)}>
                   <input id="ven-adicional" className="field-input cifra" inputMode="decimal" autoComplete="off" value={v.adicional} onChange={(e) => cambiarV("adicional", S.filtrarMonto(e.target.value, V.MAX_ENTEROS_ADICIONAL, v.adicional))} data-referencial={referencial ?? ""} />
                 </Campo>
               )}
+            </section>
+
+            {/* Descuento (PO 13/11): autorizado antes, por llamada, por el gerente o la administradora */}
+            <section aria-labelledby="ven-descuento" className="space-y-3" data-seccion-descuento>
+              <h3 id="ven-descuento" className="text-[15px] font-bold text-marino dark:text-white">Descuento</h3>
+              <label className="flex items-start gap-2.5 text-[13.5px]">
+                <input id="ven-tiene-descuento" type="checkbox" className="mt-0.5 h-4 w-4 accent-marino-700" checked={desc.tiene} onChange={(e) => { setDesc((d) => (e.target.checked ? { ...d, tiene: true, autorizador: d.autorizador || (autorizadores.length === 1 ? autorizadores[0].codusu : "") } : V.DESCUENTO_VACIO)); setErr((x) => ({ ...x, descMonto: undefined, descMotivo: undefined, descAutorizador: undefined, descConfirmado: undefined, descuento: undefined })); }} />
+                <span>Se acordó un descuento. <span className="text-slate-500">Todo descuento lo autoriza antes, por llamada, el gerente o la administradora. Sin descuento, déjalo sin marcar.</span></span>
+              </label>
+              {desc.tiene && (
+                <div className="space-y-3 rounded-xl border border-slate-200 p-3 dark:border-white/10" data-descuento>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Campo etiqueta="Monto del descuento (S/)" error={ver("descMonto")} ayuda={typeof antesVista === "number" ? `Se resta del importe de ${S.soles(antesVista)} (precio y techo). No es un pago ni un adelanto.` : "Se resta del precio y el techo. No es un pago ni un adelanto."}>
+                      <input id="ven-descuento-monto" className="field-input cifra" inputMode="decimal" autoComplete="off" value={desc.monto} onChange={(e) => cambiarDesc("monto", S.filtrarMonto(e.target.value, V.MAX_ENTEROS_DESCUENTO, desc.monto), "descMonto")} />
+                    </Campo>
+                    <Campo etiqueta="Autorizó por llamada" error={ver("descAutorizador")}>
+                      <select id="ven-descuento-autorizador" className="field-input" value={desc.autorizador} onChange={(e) => cambiarDesc("autorizador", e.target.value, "descAutorizador")}>
+                        <option value="">Elige al gerente o la administradora</option>
+                        {autorizadores.map((a) => <option key={a.codusu} value={a.codusu}>{a.nombre} ({a.rol}){a.codusu === yo?.codusu ? ", tú" : ""}</option>)}
+                      </select>
+                    </Campo>
+                  </div>
+                  <Campo etiqueta="Motivo del descuento" error={ver("descMotivo")} ayuda={`${largo(desc.motivo)}/${V.MAX_MOTIVO_DESCUENTO}`}>
+                    <textarea id="ven-descuento-motivo" className="field-input" rows={2} maxLength={V.MAX_MOTIVO_DESCUENTO + 20} value={desc.motivo} placeholder="Ej.: descuento por pago al contado acordado con gerencia" onChange={(e) => cambiarDesc("motivo", e.target.value, "descMotivo")} />
+                  </Campo>
+                  <label className="flex items-start gap-2.5 text-[13.5px]">
+                    <input id="ven-descuento-confirmado" type="checkbox" className="mt-0.5 h-4 w-4 accent-marino-700" checked={desc.confirmado} onChange={(e) => cambiarDesc("confirmado", e.target.checked, "descConfirmado")} />
+                    <span>{desc.autorizador === yo?.codusu ? "Autoricé este descuento antes de registrar la venta." : `${nombreDe(desc.autorizador) || "El gerente o la administradora"} me autorizó este descuento por llamada antes de registrar la venta.`} <span className="text-slate-500">Queda registrado como tu confirmación telefónica, con tu nombre y la hora; no es una aprobación digital de esa persona.</span></span>
+                  </label>
+                  {ver("descConfirmado") && <p className="text-[12px] font-medium text-acento">{ver("descConfirmado")}</p>}
+                </div>
+              )}
+              {err.descuento && <Aviso tipo="error"><span data-error-descuento>{err.descuento}</span></Aviso>}
             </section>
 
             {/* Pagos */}
@@ -596,7 +660,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
                 );
               })}
               {err.pagos && <Aviso tipo="error"><span data-error-pagos>{err.pagos}</span></Aviso>}
-              <Cuentas precio={precio} decision={decisionFinal} techoNombre={nombreTechoFinal} adicional={adicionalValido ? nAdicional : NaN} total={totalVista} adelanto={adelanto} pagos={totalPagos} saldo={saldoVista} modalidad={v.modalidad} />
+              <Cuentas precio={precio} decision={decisionFinal} techoNombre={nombreTechoFinal} adicional={adicionalValido ? nAdicional : NaN} antes={antesVista} descuento={descVista} total={totalVista} adelanto={adelanto} pagos={totalPagos} saldo={saldoVista} modalidad={v.modalidad} />
             </section>
 
             {/* Entrega prevista */}
@@ -623,7 +687,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
               <h3 id="ven-comprobante" className="text-[15px] font-bold text-marino dark:text-white">Comprobante</h3>
               <label className="flex items-start gap-2.5 text-[13.5px]">
                 <input id="ven-tiene-comprobante" type="checkbox" className="mt-0.5 h-4 w-4 accent-marino-700" checked={comp.tiene} onChange={(e) => { setComp((c) => ({ ...c, tiene: e.target.checked })); setErr((x) => ({ ...x, compReferencia: undefined, compFecha: undefined })); }} />
-                <span>La boleta o factura ya se emitió fuera de la plataforma. <span className="text-slate-500">Si todavía no, déjalo sin marcar y regístralo después desde la ficha.</span></span>
+                <span>EPSA ya emitió la boleta o factura en SUNAT. <span className="text-slate-500">Aquí solo se guarda su serie, número y fecha. Si todavía no se emite, déjalo sin marcar y regístralo después desde la ficha.</span></span>
               </label>
               {comp.tiene && (
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -656,10 +720,10 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
 // Ficha de la moto: venta registrada
 // ---------------------------------------------------------------------------------------------
 // HU-021: «Cancelar venta» (onCancelar) para el gerente, la administradora o el vendedor responsable vigente
-export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar }) {
+export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, onCorregir, version = 0 }) {
   const toast = useToast();
   const activo = unidad?.comercial === "Vendida";
-  const consulta = useConsultaCentral(() => V.ventaDeUnidadApi(unidad.coduni), [unidad?.coduni], { activo, intervalo: 20000, clave: `venta:${unidad?.coduni}` });
+  const consulta = useConsultaCentral(() => V.ventaDeUnidadApi(unidad.coduni), [unidad?.coduni, version], { activo, intervalo: 20000, clave: `venta:${unidad?.coduni}` });
   const [eligiendo, setEligiendo] = useState(false);
   const [comprobante, setComprobante] = useState(false);
   const vta = consulta.data;
@@ -687,6 +751,7 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar }) 
         </div>
         <div className="flex flex-wrap gap-2">
           {vta && puedeEditar && !vta.comprobanteExterno && <button className="btn btn-secondary !py-2 text-[13px]" onClick={() => setComprobante(true)} data-registrar-comprobante>Registrar comprobante</button>}
+          {vta && <BotonCorregir venta={vta} onCorregir={onCorregir} />}
           {vta && <BotonCancelar tipo={VENTA} operacion={vta} onCancelar={onCancelar} />}
         </div>
       </div>
@@ -709,6 +774,8 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar }) 
               {t.decision !== S.POR_DEFINIR && <p className="mt-0.5 text-[12px] text-slate-500">La decisión ya no se cambia.</p>}
             </dd>
           </div>
+          {Number(vta.descuento) > 0 && <Fila k="Importe antes del descuento" data="antes"><span className="cifra">{S.soles(vta.importeAntesDescuento)}</span></Fila>}
+          {Number(vta.descuento) > 0 && <Fila k="Descuento autorizado" data="descuento"><span className="cifra" data-descuento-venta={vta.descuento}>− {S.soles(vta.descuento)}</span>{vta.motivoDescuento ? `. Motivo: ${vta.motivoDescuento}` : ""}<span className="mt-0.5 block text-[12px] font-normal text-slate-500" data-autorizacion-descuento>{V.textoAutorizacion(vta)}</span></Fila>}
           <Fila k="Total de la venta" data="total"><span className="cifra" data-total-venta={vta.importe}>{S.soles(vta.importe)}</span></Fila>
           {a && <Fila k="Adelanto de la separación"><span className="cifra">{S.soles(a.monto)}</span>{` en ${String(a.medioPago).toLowerCase()}${a.fechaPago ? `, del ${fechaLarga(a.fechaPago)}` : ""}. Se cuenta una sola vez.`}</Fila>}
           <Fila k="Pagos">
@@ -730,7 +797,7 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar }) 
           <Fila k="Ubicación de la moto">{x.texto}</Fila>
           <Fila k="Entrega pactada" data="entrega">{obs.entrega ? `Se entregará ${obs.entrega}${vta.sedeEntregaPrevista && !/\ben\b/.test(obs.entrega) ? ` en ${vta.sedeEntregaPrevista.nombre}` : ""}` : vta.sedeEntregaPrevista ? `En ${vta.sedeEntregaPrevista.nombre}` : "Por acordar"}<span className="block text-[12px] font-normal text-slate-500">Acuerdo pendiente: la moto no está armada ni entregada por registrar la venta.</span></Fila>
           <Fila k="Preparación actual" data="preparacion"><span data-etapa-preparacion={prep.etapa}>{prep.etapa}</span>{prep.nota && <span className="block text-[12px] font-normal text-slate-500">{prep.nota}</span>}</Fila>
-          <Fila k="Comprobante">{vta.comprobanteExterno ? `${vta.comprobanteExterno.referencia}, emitido el ${fechaLarga(vta.comprobanteExterno.fecha)}` : <span className="text-amber-700 dark:text-amber-300">Sin comprobante registrado</span>}</Fila>
+          <Fila k="Comprobante">{vta.comprobanteExterno ? `${vta.comprobanteExterno.referencia}, emitido el ${fechaLarga(vta.comprobanteExterno.fecha)}` : <span className="text-amber-700 dark:text-amber-300">Sin comprobante registrado</span>}<span className="block text-[12px] font-normal text-slate-500">La boleta o factura la emite EPSA en SUNAT; aquí solo se guarda su serie, número y fecha.</span></Fila>
           <Fila k="Responsable">{vta.responsable?.nombre || "Sin responsable asignado"}</Fila>
           <Fila k="Fecha de la venta">{`${fechaLarga(V.soloFecha(vta.fechaVenta))}, registrada por ${vta.autor?.nombre || ""}`}</Fila>
           {obs.resto && <Fila k="Observación">{obs.resto}</Fila>}

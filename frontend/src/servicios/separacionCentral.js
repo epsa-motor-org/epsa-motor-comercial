@@ -243,11 +243,9 @@ export function techoInstaladoDe(unidad) {
   if (!t?.codtte || t.estado !== "Instalado") return null;
   return { codtte: String(t.codtte), nombre: t.configuracion || unidad?.preparacion?.techo?.configuracion || "" };
 }
-// Techo que la moto ya tiene configurado en su ficha (HU-004), esté por instalar, en armado o instalado (HU-033).
-// Una moto así solo se separa o vende con ese mismo techo o con el techo «Por definir»: no «Sin techo» ni otro techo
-// (CP-006-07 y CP-006-11; la base lo vuelve a revisar con PT438). Configurada «Sin techo» no compromete nada.
-// Devuelve { codtte, nombre, instalado, estado } o null.
-export function techoDeLaMoto(unidad, tipos = []) {
+// Techo configurado en la ficha (HU-004), esté por instalar, en armado o instalado (HU-033):
+// { codtte, nombre, instalado, estado } o null. Configurada «Sin techo» no compromete nada.
+export function techoConfiguradoDe(unidad, tipos = []) {
   const po = unidad?.preparacion?.operativa?.techo;
   const nombreCfg = po?.configuracion || unidad?.preparacion?.techo?.configuracion || "";
   const sin = tipoSinTecho(tipos);
@@ -258,13 +256,27 @@ export function techoDeLaMoto(unidad, tipos = []) {
   const estado = po?.estado || unidad?.preparacion?.techo?.avance || "Pendiente";
   return { codtte: String(tipo?.codtte ?? po.codtte), nombre: tipo?.nombre || nombreCfg || "Techo", instalado: estado === "Instalado", estado };
 }
-// Con un techo configurado o instalado, una decisión es compatible si es «Por definir» o ese mismo techo
+// Regla del PO (13/11, EMT-154/10115): solo un techo instalado físicamente restringe la elección del comprador.
+// Una moto con techo instalado solo se separa o vende con ese mismo techo o con el techo «Por definir»
+// (CP-006-07 y CP-006-11; la base lo revisa con PT438). Un techo solo configurado, todavía sin instalar, no
+// restringe: se muestra la diferencia para que la configuración se ajuste en la ficha.
+export function techoDeLaMoto(unidad, tipos = []) {
+  const x = techoConfiguradoDe(unidad, tipos);
+  return x?.instalado ? x : null;
+}
+// Con un techo instalado, una decisión es compatible si es «Por definir» o ese mismo techo
 export const compatibleConInstalado = (instalado, decision, tipo) => !instalado || decision === POR_DEFINIR || (decision === CON_TECHO && String(tipo?.codtte) === instalado.codtte);
-export const estadoTechoMoto = (x) => (x?.instalado ? "instalado" : x?.estado === "En proceso" ? "configurado y en armado" : "configurado (por instalar)");
-export const textoInstalado = (x) => (x?.instalado
-  ? `Esta moto tiene «${x.nombre}» instalado. Solo puede venderse o separarse con ese techo (o con el techo por definir). Si el comprador quiere otro techo o la moto sin techo, elige otra moto compatible del mismo modelo e infórmale el plazo estimado de preparación o instalación.`
-  : `Esta moto ya tiene «${x?.nombre}» ${estadoTechoMoto(x)}. Solo puede venderse o separarse con ese techo (o con el techo por definir). Si el comprador quiere otro techo o la moto sin techo, pide a gerencia que cambie la configuración de techo en la ficha antes de instalarlo, o elige otra moto compatible.`);
-export const errorTechoMoto = (x) => `Esta moto tiene «${x.nombre}» ${x.instalado ? "instalado" : "configurado"}: elige ese techo o «Por definir».`;
+export const estadoTechoMoto = (x) => (x?.instalado ? "instalado" : x?.estado === "En proceso" ? "configurado y en armado" : "configurado, por instalar");
+export const textoInstalado = (x) => `Esta moto tiene «${x?.nombre}» instalado. Solo puede venderse o separarse con ese techo (o con el techo por definir). Si el comprador quiere otro techo o la moto sin techo, elige otra moto compatible del mismo modelo e infórmale el plazo estimado de preparación o instalación.`;
+export const errorTechoMoto = (x) => `Esta moto tiene «${x.nombre}» instalado: elige ese techo o «Por definir».`;
+// Techo configurado (sin instalar) distinto de lo que eligió el comprador: no impide registrar, pero queda a la vista
+// para corregir la configuración en la ficha. Devuelve el texto o "".
+export function diferenciaConfigurado(cfg, decision, tipo) {
+  if (!cfg || cfg.instalado || decision === POR_DEFINIR || !decision) return "";
+  if (decision === SIN_TECHO) return `La moto tiene «${cfg.nombre}» ${estadoTechoMoto(cfg)} y el comprador la quiere sin techo. Se puede registrar así; después hay que cambiar la configuración de techo en la ficha.`;
+  if (decision === CON_TECHO && tipo && String(tipo.codtte) !== cfg.codtte) return `La moto tiene «${cfg.nombre}» ${estadoTechoMoto(cfg)} y el comprador eligió «${tipo.nombre}». Se puede registrar así; después hay que cambiar la configuración de techo en la ficha.`;
+  return "";
+}
 // Adicional referencial de un tipo de techo (catálogo único, regla del PO del 11 de noviembre)
 export const adicionalDe = (t) => (t && t.adicionalReferencial !== null && t.adicionalReferencial !== undefined && Number.isFinite(Number(t.adicionalReferencial)) ? Number(t.adicionalReferencial) : null);
 // Rótulo de una fila de cuentas: «Techo clásico de fibra», «Techo lona», «Techo fibra clásica equipada»

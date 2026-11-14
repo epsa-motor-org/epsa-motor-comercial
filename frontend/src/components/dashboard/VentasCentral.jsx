@@ -68,7 +68,7 @@ export default function VentasCentral() {
         <Vacio titulo={q ? "No hay ventas con esa búsqueda" : "Todavía no hay ventas registradas"} texto={q ? "Busca por nombre o celular del comprador, motor, chasis o número de comprobante." : "Registra una venta con «Registrar venta» o desde la ficha de una moto libre o separada."} />
       ) : (
         <>
-          <Tabla columnas={["Fecha", "Comprador", "Moto", "Total con techo", "Recibido y saldo", "Responsable", ""]}>
+          <Tabla columnas={["Fecha", "Comprador", "Moto", "Total", "Recibido y saldo", "Responsable", ""]}>
             {lista.map((v) => { const cancelada = v.estado === "Cancelada"; return (
               <tr key={v.codven} className={`align-top ${cancelada ? "bg-slate-50/70 text-slate-500 dark:bg-white/[0.03]" : ""}`} data-venta-fila={v.codven} data-coduni={v.unidad?.coduni} data-estado={v.estado}>
                 <td className="px-4 py-3 text-slate-500"><span className="whitespace-nowrap">{fechaCorta(v.fecha)}</span><span className="block text-[12px]">{v.modalidad}</span><span className="block text-[12px] text-slate-400">{v.comprobanteExterno ? v.comprobanteExterno.referencia : "Sin comprobante"}</span></td>
@@ -78,6 +78,7 @@ export default function VentasCentral() {
                   <span className={`cifra whitespace-nowrap font-semibold ${cancelada ? "text-slate-500 line-through decoration-slate-400" : "text-marino dark:text-white"}`}>{S.soles(v.total)}</span>
                   <span className="block whitespace-nowrap text-[12px] text-slate-400">Moto <span className="cifra">{S.soles(v.precioBaseAcordado)}</span></span>
                   <span className={`block text-[12px] ${v.techo?.decision === S.POR_DEFINIR && !cancelada ? "font-semibold text-amber-700 dark:text-amber-300" : "text-slate-400"}`}>{v.techo?.decision === S.CON_TECHO ? <>{textoTecho(v.techo)} <span className="cifra whitespace-nowrap">+ {S.soles(v.adicionalTechoAcordado)}</span></> : v.techo?.decision === S.SIN_TECHO ? "Sin techo + S/ 0.00" : "Techo por definir"}</span>
+                  {Number(v.descuento) > 0 && <span className="block whitespace-nowrap text-[12px] text-slate-400" data-descuento-lista={v.descuento}>Descuento <span className="cifra">− {S.soles(v.descuento)}</span></span>}
                 </td>
                 <td className="px-4 py-3" data-saldo={cancelada ? "" : v.saldo}>
                   <span className="cifra whitespace-nowrap">{S.soles(v.totalRecibido)}</span><span className="text-[12px] text-slate-400">{cancelada && Number(v.totalRecibido) > 0 ? " recibido, se conserva" : " recibido"}</span>

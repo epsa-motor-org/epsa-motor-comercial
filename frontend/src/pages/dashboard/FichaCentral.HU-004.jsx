@@ -5,6 +5,8 @@
 // HU-006: también registran su venta (directa o desde la separación) y ven la venta registrada.
 // HU-021: el gerente, la administradora o el vendedor responsable vigente cancelan la separación o la venta (con motivo y
 // lo que pasó con el dinero); la ficha muestra después las cancelaciones de la moto.
+// HU-022: el gerente o la administradora corrigen el comprador o la moto de la venta (o intercambian las motos de dos
+// ventas); la ficha muestra después esas correcciones.
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Link } from "../../components/dashboard/LinkPanel";
@@ -24,6 +26,7 @@ import VenderMotoCentral, { VentaCard } from "../../components/dashboard/VenderC
 import { sePuedeVender } from "../../servicios/ventaCentral";
 import { CancelacionesUnidadCard, CancelarOperacionModal } from "../../components/dashboard/CancelarCentral";
 import { SEPARACION, VENTA } from "../../servicios/cancelacionCentral";
+import { CorreccionesUnidadCard, CorregirVentaModal } from "../../components/dashboard/CorregirCentral";
 const DESCRIPCION_TECHO = {
   "Sin techo": "La unidad no lleva techo instalado.",
   Lona: "Techo de lona. No necesita proveedor externo.",
@@ -46,6 +49,8 @@ function FichaCentral({ id }) {
   const [vendiendo, setVendiendo] = useState(false);
   const [cancelando, setCancelando] = useState(null);
   const [versionCancelaciones, setVersionCancelaciones] = useState(0);
+  const [corrigiendo, setCorrigiendo] = useState(null);
+  const [versionCorrecciones, setVersionCorrecciones] = useState(0);
   const { state } = useLocation();
   const valido = /^[1-9]\d{0,18}$/.test(String(id));
   const consulta = useConsultaCentral(() => unidadCentralApi(id), [id], { activo: valido, clave: `unidad:${id}` });
@@ -108,8 +113,9 @@ function FichaCentral({ id }) {
         )}</Card>
       </div>
       {u.comercial === "Separada" && <div className="mb-6"><SeparacionActivaCard unidad={u} puedeTecho={separa} onCambio={recargar} onVender={separa && sePuedeVender(u) ? () => setVendiendo(true) : undefined} onCancelar={(s) => setCancelando({ tipo: SEPARACION, operacion: s })} /></div>}
-      {u.comercial === "Vendida" && <div className="mb-6"><VentaCard unidad={u} puedeEditar={separa} onCambio={recargar} onCancelar={(v) => setCancelando({ tipo: VENTA, operacion: v })} /></div>}
+      {u.comercial === "Vendida" && <div className="mb-6"><VentaCard unidad={u} puedeEditar={separa} onCambio={recargar} version={versionCorrecciones} onCancelar={(v) => setCancelando({ tipo: VENTA, operacion: v })} onCorregir={(v) => setCorrigiendo(v)} /></div>}
       <div className="mb-6 empty:hidden"><CancelacionesUnidadCard unidad={u} version={versionCancelaciones} /></div>
+      <div className="mb-6 empty:hidden"><CorreccionesUnidadCard unidad={u} version={versionCorrecciones} /></div>
       <div className="mb-6"><PreparacionUnidadCard unidad={u} gestiona={gestiona} onCambio={recargar} /></div>
       <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
         <MovimientosUnidad unidad={u} gestiona={gestiona} ubicaciones={ubicaciones} onCambio={recargar} />
@@ -117,6 +123,7 @@ function FichaCentral({ id }) {
       </div>
       {separando && <SepararMotoCentral unidad={u} onClose={() => setSeparando(false)} onHecho={recargar} onConflicto={recargar} />}
       {vendiendo && <VenderMotoCentral unidad={u} onClose={() => setVendiendo(false)} onHecho={recargar} onConflicto={recargar} />}
+      {corrigiendo && <CorregirVentaModal venta={corrigiendo} unidad={u} onClose={() => setCorrigiendo(null)} onHecho={() => { recargar(); setVersionCorrecciones((n) => n + 1); }} onCambio={() => { recargar(); setVersionCorrecciones((n) => n + 1); }} />}
       {cancelando && <CancelarOperacionModal tipo={cancelando.tipo} operacion={cancelando.operacion} unidad={u} onClose={() => setCancelando(null)} onHecho={() => { recargar(); setVersionCancelaciones((n) => n + 1); }} onCambio={recargar} />}
     </div>
   );
@@ -187,6 +194,12 @@ function ConfigTecho({ unidad, gestiona, onGuardado }) {
   const comp = unidad.techoComercial;
   const vendidaPorDefinir = unidad.comercial === "Vendida" && (!comp || comp.decision === "Por definir");
   const permitido = (x) => !comp || comp.decision === "Por definir" ? !vendidaPorDefinir : comp.decision === "Con techo" ? String(x.codtte) === String(comp.codtte) : x.nomtte === "Sin techo";
+  // Regla del PO del 13/11: la venta o separación pudo registrarse con un techo distinto del configurado (sin instalar).
+  // La diferencia queda a la vista aquí para corregir la configuración.
+  const cfgActual = inicial?.techo && inicial.techo !== "Sin techo" ? inicial.techo : "";
+  const difAcordado = !comp || comp.decision === "Por definir" ? ""
+    : comp.decision === "Sin techo" ? (cfgActual ? `Diferencia: la moto tiene «${cfgActual}» configurado y el comprador la quiere sin techo. Cámbialo a «Sin techo».` : "")
+      : (comp.nombre && cfgActual !== comp.nombre && cfgActual ? `Diferencia: la moto tiene «${cfgActual}» configurado y el comprador eligió «${comp.nombre}». Cambia la configuración a ese techo.` : "");
   const cambio = inicial && (f.techo !== inicial.techo || (requiere && f.proveedor !== inicial.proveedor) || limpiar(requiere ? f.detalle : "") !== limpiar(inicial.detalle));
 
   async function guardar(e) {
@@ -221,6 +234,7 @@ function ConfigTecho({ unidad, gestiona, onGuardado }) {
       <h2 className="text-lg font-bold text-marino dark:text-white">Configuración de techo</h2>
       <p className="text-[13px] text-slate-500">Tipo de techo y proveedor de esta unidad. Su instalación se registra en Preparación.</p>
       {comp && comp.decision !== "Por definir" && <div className="mt-3"><Aviso tipo="info"><span data-techo-elegido-comprador={comp.decision}>{comp.decision === "Con techo" ? `El comprador eligió «${comp.nombre}» en su ${comp.origen === "Venta" ? "venta" : "separación"}. Solo se puede configurar ese techo; al guardarlo queda por instalar en Preparación.` : `El comprador eligió la moto sin techo en su ${comp.origen === "Venta" ? "venta" : "separación"}: no se le configura un techo.`}</span></Aviso></div>}
+      {difAcordado && <div className="mt-3"><Aviso tipo="aviso"><span data-techo-diferencia-ficha>{difAcordado}</span></Aviso></div>}
       {vendidaPorDefinir && <div className="mt-3"><Aviso tipo="aviso">La moto se vendió con el techo por definir. Cuando el comprador decida, regístralo en «Venta registrada» y luego configura aquí ese techo.</Aviso></div>}
       {!cat && !errCarga && <p className="mt-4 text-[13px] text-slate-500">Cargando la configuración del techo…</p>}
       {errCarga && <div className="mt-4"><Aviso tipo="error">No se pudo cargar el techo: {errCarga}</Aviso></div>}
