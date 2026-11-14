@@ -216,6 +216,8 @@ export const preparacionListaApi = () => rpc("hu033_preparacion_listar");
 export const techoComercialUnidadesApi = () => rpc("hu006_techo_comercial_unidades");
 // HU-021 · Separaciones y ventas canceladas de una moto (solo lectura; el vendedor ve las suyas)
 export const cancelacionesUnidadApi = (coduni) => rpc("hu021_cancelaciones_unidad", { p_coduni: Number(coduni) });
+// HU-022 · Correcciones de comprador o moto de una venta o de una moto, con nombres (solo lectura; gerente y administradora)
+export const correccionesDetalleApi = ({ codven, coduni } = {}) => rpc("hu022_correcciones_detalle", { p_codven: codven ? Number(codven) : null, p_coduni: coduni ? Number(coduni) : null });
 export const preparacionUnidadApi = (coduni) => rpc("hu033_consultar_preparacion_unidad", { p_coduni: Number(coduni) });
 export const actualizarPreparacionApi = (coduni, d, clave) => rpc("hu033_actualizar_preparacion_unidad", {
   p_coduni: Number(coduni), p_etapa: d.etapa, p_estado: d.estado, p_version_esperada: Number(d.version),

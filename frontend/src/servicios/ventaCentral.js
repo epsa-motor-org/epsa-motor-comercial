@@ -112,12 +112,69 @@ export function errorAdicional(texto, referencial) {
 export const ayudaAdicional = (referencial) => (typeof referencial === "number"
   ? `Referencial ${S.soles(referencial)}. Si se acordó otro monto con el comprador, escríbelo: queda registrado como acordado.`
   : "Este techo no tiene adicional referencial: escribe el monto acordado.");
-// Total y saldo a la vista (el servidor los vuelve a calcular)
-export function cuentasVenta({ base, adicional, adelanto = 0, pagos = 0 }) {
-  if (typeof base !== "number" || !(base > 0)) return { total: null, recibido: redondear(adelanto + pagos), saldo: null };
-  const total = redondear(base + (Number.isFinite(adicional) ? adicional : 0));
+// Total y saldo a la vista (el servidor los vuelve a calcular):
+// importe antes del descuento = base + adicional; total = importe antes − descuento; saldo = total − recibido
+export function cuentasVenta({ base, adicional, descuento = 0, adelanto = 0, pagos = 0 }) {
   const recibido = redondear(adelanto + pagos);
-  return { total, recibido, saldo: redondear(total - recibido) };
+  if (typeof base !== "number" || !(base > 0)) return { antes: null, total: null, recibido, saldo: null };
+  const antes = redondear(base + (Number.isFinite(adicional) ? adicional : 0));
+  const total = redondear(antes - (Number.isFinite(descuento) && descuento > 0 ? descuento : 0));
+  return { antes, total, recibido, saldo: redondear(total - recibido) };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Descuento comercial (definición del PO del 13/11, HU-006 escenarios 14 a 19)
+// ---------------------------------------------------------------------------------------------
+// Monto en soles con motivo; todo descuento mayor a cero lo autoriza antes, por llamada, el gerente o la
+// administradora. Quien registra la venta indica quién lo autorizó y confirma la llamada: es una confirmación
+// telefónica registrada por el operador, no una aprobación digital de esa persona.
+export const MAX_MOTIVO_DESCUENTO = 500;
+export const MAX_ENTEROS_DESCUENTO = 5;
+export const ROLES_AUTORIZAN_DESCUENTO = ["Gerente", "Administradora"];
+export const autorizadoresDescuento = (form) => (form?.responsables || []).filter((r) => ROLES_AUTORIZAN_DESCUENTO.includes(r.rol));
+export const DESCUENTO_VACIO = { tiene: false, monto: "", motivo: "", autorizador: "", confirmado: false };
+export function errorMontoDescuento(texto, antes) {
+  const t = String(texto ?? "").trim();
+  if (!t) return "Escribe el monto del descuento. Si no hay descuento, desmarca la casilla.";
+  if (t.startsWith("-")) return "El descuento no puede ser negativo.";
+  if (/[.,]$/.test(t)) return "Completa los decimales o borra la coma.";
+  const n = S.leerMonto(t);
+  if (Number.isNaN(n)) return "Escribe solo el monto, sin separador de miles (por ejemplo 300 o 300,50).";
+  if (/[.,]\d{3,}$/.test(t)) return "El descuento lleva como máximo 2 decimales.";
+  if (n <= 0) return "El descuento debe ser mayor que cero. Si no hay descuento, desmarca la casilla.";
+  if (typeof antes === "number" && n > antes) return `El descuento no puede superar el importe de la venta (${S.soles(antes)}).`;
+  return "";
+}
+// Errores del bloque de descuento: { descMonto, descMotivo, descAutorizador, descConfirmado }
+export function erroresDescuento(d, { antes, recibido = 0, autorizadores = [] } = {}) {
+  const e = {};
+  if (!d?.tiene) return e;
+  const eM = errorMontoDescuento(d.monto, antes);
+  if (eM) e.descMonto = eM;
+  else if (typeof antes === "number") {
+    const total = redondear(antes - S.leerMonto(d.monto));
+    if (total < redondear(recibido)) e.descMonto = `Con este descuento el total (${S.soles(total)}) queda por debajo de lo ya recibido (${S.soles(recibido)}). Revisa el monto.`;
+  }
+  const motivo = S.limpio(d.motivo);
+  if (!motivo) e.descMotivo = "Escribe el motivo del descuento.";
+  else if ([...motivo].length > MAX_MOTIVO_DESCUENTO) e.descMotivo = `Máximo ${MAX_MOTIVO_DESCUENTO} caracteres.`;
+  else if ((motivo.match(/\p{L}/gu) || []).length < 3) e.descMotivo = "Escribe el motivo con palabras.";
+  else if (/[\u0000-\u001f\u007f]/.test(motivo)) e.descMotivo = "El motivo tiene caracteres que no se pueden guardar."; // eslint-disable-line no-control-regex
+  if (!autorizadores.some((a) => String(a.codusu) === String(d.autorizador))) e.descAutorizador = "Elige al gerente o la administradora que autorizó el descuento por llamada.";
+  if (!d.confirmado) e.descConfirmado = "Confirma que recibiste la autorización por llamada antes de registrar el descuento.";
+  return e;
+}
+// Datos del descuento para enviar a la API (nada si no hay descuento)
+export function descuentoParaEnviar(d) {
+  if (!d?.tiene) return {};
+  return { descuento: S.montoParaEnviar(d.monto), motivoDescuento: S.limpio(d.motivo), codusuAutorizadorDescuento: Number(d.autorizador), confirmacionTelefonicaRecibida: true };
+}
+// Texto de la autorización registrada
+export function textoAutorizacion(vta) {
+  if (!(Number(vta?.descuento) > 0)) return "";
+  const quien = vta.nombreAutorizadorDescuento || "gerencia";
+  const cuando = vta.fechaConfirmacionTelefonica ? `, registrada el ${fechaLima(vta.fechaConfirmacionTelefonica).split("-").reverse().join("/")}` : "";
+  return `Autorizado por llamada por ${quien}. Confirmación registrada por ${vta.autor?.nombre || "quien registró la venta"}${cuando}; no es una aprobación digital.`;
 }
 // Texto del desglose del techo de una venta
 export function textoAdicional(decision, nombre, acordado, referencial) {
@@ -200,6 +257,7 @@ export function fechaLima(iso) {
 // Mensaje claro para los errores de la venta
 export function campoDelError(e) {
   const m = String(e?.message || "");
+  if (/descuento|autorizador/i.test(m)) return "descuento";
   if (/adicional\s*acordado|adicional(Techo)?Acordado/i.test(m)) return "adicional";
   if (/total recalculado|superan el importe/i.test(m)) return "pagos";
   if (/evidencia/i.test(m)) return "pagos";

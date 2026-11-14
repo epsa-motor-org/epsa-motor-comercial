@@ -1,7 +1,8 @@
 // HU-021 · Cancelar una separación o una venta sin borrar su información (base central)
 // Desde la ficha de la moto, quien puede (gerente, administradora o el vendedor responsable vigente) registra el
 // motivo y qué pasó con el dinero recibido. La operación queda «Cancelada» con su nombre y la fecha; se conservan el
-// adelanto, los pagos, las evidencias y el comprobante. La moto queda libre solo si no tiene otro compromiso vigente;
+// adelanto, los pagos, las evidencias y el comprobante. La moto queda libre solo si no tiene otro compromiso vigente ni un
+// traslado en curso (con traslado queda «No disponible»);
 // su ubicación, techo y preparación no cambian. No se registra ninguna devolución ni se anula ningún comprobante.
 // Si la red falla, se revisa en el servidor si la cancelación quedó guardada antes de decir nada: no se anuncia un
 // éxito que no ocurrió ni se cancela dos veces.
@@ -38,7 +39,7 @@ function DineroOperacion({ tipo, op }) {
   const adelanto = Number(op.adelantoSeparacion?.monto || 0) && op.adelantoSeparacion?.ingresoConfirmado !== false ? Number(op.adelantoSeparacion.monto) : 0;
   return (
     <dl className="divide-y divide-slate-100 text-[13.5px] dark:divide-white/10" data-dinero-operacion>
-      <Dato k="Total de la venta" data="total"><span className="cifra">{S.soles(op.importe)}</span></Dato>
+      <Dato k="Total de la venta" data="total"><span className="cifra">{S.soles(op.importe)}</span>{Number(op.descuento) > 0 ? <span className="font-normal text-slate-500">{` (incluye descuento autorizado de ${S.soles(op.descuento)})`}</span> : null}</Dato>
       {adelanto > 0 && <Dato k="Adelanto de la separación" data="adelanto"><span className="cifra">{S.soles(adelanto)}</span></Dato>}
       <Dato k="Pagos" data="pagos">{op.pagos?.length ? <><span className="cifra">{S.soles(pagos)}</span>{` en ${op.pagos.length} pago${op.pagos.length === 1 ? "" : "s"}`}</> : "Ninguno"}</Dato>
       <Dato k="Total recibido" data="recibido"><span className="cifra" data-recibido={op.totalRecibido}>{S.soles(op.totalRecibido)}</span></Dato>
@@ -153,7 +154,7 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
 
   return (
     <Modal abierto onClose={onClose} titulo={titulo} ancho="max-w-xl" sinAvisoCambios={Boolean(enviando)}
-      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto se libera si no tiene otro compromiso.`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); return !e.motivo && !e.observacion && !bloqueada; } }}
+      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre si no tiene otro compromiso ni un traslado en curso.`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); return !e.motivo && !e.observacion && !bloqueada; } }}
       pie={<>
         <button type="button" className="btn btn-secondary !py-2" onClick={onClose} data-volver-cancelacion>Volver</button>
         <button form="f-cancelar" className="btn !py-2 bg-acento text-white hover:bg-acento-600 disabled:opacity-60" disabled={Boolean(enviando) || bloqueada} data-confirmar-cancelacion>{enviando || titulo}</button>

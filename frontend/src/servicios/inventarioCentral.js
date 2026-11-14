@@ -52,7 +52,7 @@ export function preparacionDe(p) {
 export const ETAPAS_FILTRO = ["Pendiente de armado", "Techo por definir", "Falta instalar techo", "Techo en proceso", "Por confirmar entrega", "Lista para entrega"];
 // Con la base central (HU-033 de Michelle) la entrega no se marca a mano: está lista cuando se cumplen sus etapas
 // La moto se vende con o sin techo: solo el techo que eligió el cliente y falta armar queda pendiente
-export const ETAPAS_FILTRO_CENTRAL = ["Techo por definir", "Techo elegido sin programar", "Pendiente de armado del techo", "Techo en armado", "Lista para entrega"];
+export const ETAPAS_FILTRO_CENTRAL = ["Techo por definir", "Techo elegido sin programar", "Techo distinto al acordado", "Pendiente de armado del techo", "Techo en armado", "Lista para entrega"];
 
 // HU-033 · Etapa visible a partir de la preparación guardada. La moto se vende con o sin techo: solo queda
 // pendiente el techo que eligió el cliente al separar y que falta armar (instalar).
@@ -69,12 +69,21 @@ export function etapaOperativa(po) {
 // comprador. Si el techo sigue «Por definir», o si eligió un techo que la moto todavía no tiene configurado, no figura
 // «Lista para entrega» aunque su preparación física no tenga pendientes. Solo cambia lo que se muestra: la venta no
 // configura, instala, arma ni entrega nada. c = { decision, codtte, nombre, requiereInstalacion, origen }.
+// Regla del PO del 13/11: un techo solo configurado no impide vender o separar con otra elección; la diferencia entre
+// lo configurado y lo acordado queda a la vista («Techo distinto al acordado») para corregir la configuración.
 export function etapaComercialDe(po, c) {
   if (!c) return null;
   const quien = c.origen === "Venta" ? "El comprador" : "El comprador de la separación";
+  const t = po?.techo || {};
+  const otro = t.codtte && t.requiereInstalacion ? t : null; // techo configurado en la moto (no «Sin techo»)
+  const como = otro?.estado === "Instalado" ? "instalado" : "configurado";
   if (c.decision === "Por definir") return { etapa: "Techo por definir", tono: "ambar", nota: `${quien} aún no decide el techo. Cuando lo elija, se programa su instalación.` };
-  if (c.decision === "Con techo" && c.requiereInstalacion && String(po?.techo?.codtte || "") !== String(c.codtte || "")) {
-    return { etapa: "Techo elegido sin programar", tono: "ambar", nota: `${quien} eligió ${c.nombre || "un techo"}: configúralo en «Configuración de techo» de la ficha para programar su instalación.` };
+  if (c.decision === "Sin techo" && otro) {
+    return { etapa: "Techo distinto al acordado", tono: "ambar", nota: `${quien} la quiere sin techo, pero la moto tiene «${otro.configuracion || "un techo"}» ${como}: corrige la configuración de techo en la ficha.` };
+  }
+  if (c.decision === "Con techo" && String(t.codtte || "") !== String(c.codtte || "")) {
+    if (otro) return { etapa: "Techo distinto al acordado", tono: "ambar", nota: `${quien} eligió ${c.nombre || "un techo"}, pero la moto tiene «${otro.configuracion || "otro techo"}» ${como}: cambia la configuración de techo en la ficha.` };
+    if (c.requiereInstalacion) return { etapa: "Techo elegido sin programar", tono: "ambar", nota: `${quien} eligió ${c.nombre || "un techo"}: configúralo en «Configuración de techo» de la ficha para programar su instalación.` };
   }
   return null;
 }
