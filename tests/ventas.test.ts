@@ -329,7 +329,7 @@ test('HU-006 HTTP: mapea errores de negocio y contrato sin filtrar detalles inte
     assert.ok(!JSON.stringify(r.body).includes('detalle SQL privado'));
   }, nombre => nombre === 'hu006_crear_venta'
     ? { data: null, error: { code: codigo, message: 'detalle SQL privado', details: 'privado', hint: 'secreto' } }
-    : null);
+    : nombre === 'hu006_venta_de_unidad' ? { data: null, error: null } : null);
 }
 );
 
@@ -376,4 +376,41 @@ test('HU-006 HTTP: GET /api/ventas valida filtros antes de RPC y no filtra error
   }, nombre => nombre === 'hu006_listar_ventas'
     ? { data: null, error: { code: 'PGRST202', message: 'detalle SQL privado' } }
     : null);
+});
+
+test('HU-006 HTTP: CP-006-12, un error no previsto con la moto ya vendida por otra solicitud responde 409, no 500', async () => {
+  for (const codigo of ['XX000', '']) await entorno(async (base, llamadas) => {
+    const r = await respuesta(fetch(`${base}/api/unidades/10/ventas`, {
+      method: 'POST', headers: { Authorization: 'Bearer vendedor', 'Content-Type': 'application/json', 'Idempotency-Key': KEY },
+      body: JSON.stringify(requestValido)
+    }));
+    assert.equal(r.status, 409, codigo || 'sin código');
+    assert.match(r.body.message, /ya tiene una venta/);
+    assert.ok(!JSON.stringify(r.body).includes('detalle SQL privado'));
+    assert.deepEqual(llamadas.map(l => l.nombre), ['hu006_crear_venta', 'hu006_venta_de_unidad']);
+  }, nombre => nombre === 'hu006_crear_venta'
+    ? { data: null, error: { code: codigo || undefined, message: 'detalle SQL privado' } }
+    : null);
+  // Clase 40 (transacción revertida por concurrencia) y espera cortada: conflicto controlado
+  for (const codigo of ['40001', '40P01', '40002', '55P03', '57014']) await entorno(async base => {
+    const r = await respuesta(fetch(`${base}/api/unidades/10/ventas`, {
+      method: 'POST', headers: { Authorization: 'Bearer vendedor', 'Content-Type': 'application/json', 'Idempotency-Key': KEY },
+      body: JSON.stringify(requestValido)
+    }));
+    assert.equal(r.status, 409, codigo);
+  }, nombre => nombre === 'hu006_crear_venta'
+    ? { data: null, error: { code: codigo, message: 'detalle SQL privado' } }
+    : nombre === 'hu006_venta_de_unidad' ? { data: null, error: null } : null);
+});
+
+test('HU-006 HTTP: el vendedor no registra a nombre de otro (PT626) y el techo instalado rechaza Por definir (PT438)', async () => {
+  for (const [codigo, status, texto] of [['PT626', 403, /responsable/], ['PT438', 409, /techo instalado/]] as const)
+    await entorno(async base => {
+      const r = await respuesta(fetch(`${base}/api/unidades/10/ventas`, {
+        method: 'POST', headers: { Authorization: 'Bearer vendedor', 'Content-Type': 'application/json', 'Idempotency-Key': KEY },
+        body: JSON.stringify(requestValido)
+      }));
+      assert.equal(r.status, status, codigo);
+      assert.match(r.body.message, texto);
+    }, nombre => nombre === 'hu006_crear_venta' ? { data: null, error: { code: codigo, message: 'detalle' } } : null);
 });

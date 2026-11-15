@@ -273,6 +273,9 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await db.exec(leer('supabase/migrations/202611140003_hu021_cancelacion_estado_e_inmutabilidad.sql'));
     await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
     await db.exec(leer('supabase/migrations/202611140005_movimiento_situacion_fisica_comercial.sql'));
+    // QA 14/11: responsable del vendedor y «Por definir» con techo instalado (se puede volver a ejecutar)
+    await db.exec(leer('supabase/migrations/202611150001_hu005_hu006_qa_responsable_y_techo_instalado.sql'));
+    await db.exec(leer('supabase/migrations/202611150001_hu005_hu006_qa_responsable_y_techo_instalado.sql'));
   });
 
   const tipos = await propietario(async () => (await db.query<{ codtte: string }>(
@@ -542,7 +545,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await assert.rejects(escalar("SELECT public.hu006_listar_ventas(NULL,50,0) r"), error('42501'));
   });
 
-  await t.test('Importe y techo: permite Por definir, Sin techo, Con techo compatible; bloquea techo instalado incompatible', async () => {
+  await t.test('Importe y techo: permite Por definir, Sin techo, Con techo compatible; con techo instalado solo ese techo', async () => {
     await login(3);
     const lona = Number(tipos);
     const sin = await crearVenta(codunis[13]!, { techo: { decision: 'Sin techo' }, clave: claveNueva() });
@@ -571,8 +574,11 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       await db.query("UPDATE preparacionunidad SET esttecho='Instalado' WHERE coduni=$1", [codunis[17]]);
     });
     await login(3);
-    const pendienteConTechoInstalado = await crearVenta(codunis[17]!, { techo: { decision: 'Por definir' }, clave: claveNueva() });
-    assert.equal(pendienteConTechoInstalado.techo.decision, 'Por definir');
+    // QA 14/11 (CP-006-07/11): con un techo instalado ya no queda nada por definir: se rechaza sin guardar
+    await assert.rejects(crearVenta(codunis[17]!, { techo: { decision: 'Por definir' }, clave: claveNueva() }), error('PT438'));
+    assert.equal(await propietario(() => escalar<number>('SELECT count(*)::int r FROM public.venta WHERE coduni=$1', [codunis[17]])), 0);
+    const conElInstalado = await crearVenta(codunis[17]!, { techo: { decision: 'Con techo', codtte: lona }, adicional: 200, clave: claveNueva() });
+    assert.equal(conElInstalado.techo.decision, 'Con techo');
     const incompatible = await propietario(() => escalar<string>(
       "SELECT codtte::text r FROM public.tipotecho WHERE nomtte='Fibra distinta QA'"));
     await login(1);
@@ -758,11 +764,14 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await assert.rejects(escalar("SELECT public.hu006_guardar_techo_venta($1,'Sin techo',NULL,NULL) r", [gerente.codven]), error('42501'));
     await assert.rejects(guardarComprobante(gerente.codven, 'F001-AUXILIAR'), error('42501'));
     await assert.rejects(crearVenta(codunis[21]!, { clave: claveNueva() }), error('42501'));
-    await login(3);
+    await login(2);
     await assert.rejects(crearVenta(codunis[24]!, { responsable: 5, clave: claveNueva() }), error('PT607'),
       'la cuenta técnica concreta no debe asignarse como responsable comercial');
     const responsableInternoValido = await crearVenta(codunis[24]!, { responsable: 6, clave: claveNueva() });
     assert.equal(responsableInternoValido.responsable.codusu, '6');
+    await login(3);
+    // QA 14/11 (EMT-156): un vendedor solo registra a su nombre
+    await assert.rejects(crearVenta(codunis[22]!, { responsable: 6, clave: claveNueva() }), error('PT626'));
     await assert.rejects(db.query('SELECT * FROM public.venta'), error('42501'));
     await assert.rejects(db.query('SELECT * FROM public.pagoventa'), error('42501'));
     await assert.rejects(db.query(`INSERT INTO public.venta(coduni,codcli,codusu,fecven,modcomven,estven)
@@ -846,6 +855,9 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     const unidad = await crearUnidadHU021();
     const tipo = await propietario(() => escalar<string>(
       "SELECT codtte::text r FROM public.tipotecho WHERE nomtte='Lona QA'"));
+    // La separación «Por definir» se registra antes de instalar el techo (con el techo ya instalado se rechaza, QA 14/11)
+    await login(3);
+    const separacion = await crearTransferenciaSeparacion(unidad);
     await login(1);
     await propietario(async () => {
       await db.query('UPDATE public.unidad SET codubi=1,codtte=$1,codpro=1,dettecuni=$2 WHERE coduni=$3',
@@ -853,7 +865,6 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       await db.query("UPDATE public.preparacionunidad SET estarmado='Terminado',esttecho='Instalado' WHERE coduni=$1", [unidad]);
     });
     await login(3);
-    const separacion = await crearTransferenciaSeparacion(unidad);
     const fisicoAntes = await propietario(() => escalar<Record<string, unknown>>(
       `SELECT jsonb_build_object('codubi',u.codubi,'codtte',u.codtte,'codpro',u.codpro,
         'detalle',u.dettecuni,'armado',p.estarmado,'techo',p.esttecho,'version',p.versionprep) r
@@ -878,6 +889,8 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
   await t.test('HU-021 venta conserva pagos, adelanto y separación Convertida, exige observación financiera y no altera datos físicos', async () => {
     const unidad = await crearUnidadHU021();
     const codtte = await propietario(() => escalar<string>("SELECT codtte::text r FROM public.tipotecho WHERE nomtte='Lona QA'"));
+    await login(3);
+    const codsep = await crearSeparacionHU021(unidad);
     await login(1);
     await propietario(async () => {
       await db.query('UPDATE public.unidad SET codubi=2,codtte=$1,codpro=1,dettecuni=$2 WHERE coduni=$3',
@@ -885,7 +898,6 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       await db.query("UPDATE public.preparacionunidad SET estarmado='Terminado',esttecho='Instalado' WHERE coduni=$1", [unidad]);
     });
     await login(3);
-    const codsep = await crearSeparacionHU021(unidad);
     const venta = await crearVenta(unidad, { pagos: [{ monto: 150, fecha: '2026-11-12', medioPago: 'Efectivo',
       referencia: null, rutaEvidencia: null, observacion: 'Pago en caja', ingresoConfirmado: true, codusuConfirmador: null }] });
     const fisicoAntes = await propietario(() => escalar<Record<string, unknown>>(

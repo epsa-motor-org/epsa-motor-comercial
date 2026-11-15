@@ -10,7 +10,7 @@
 // Techo (contrato de Michelle del 9 de noviembre): la decisión viaja con la separación: «Por definir», «Sin techo» o
 // «Con techo» y su tipo. Es una decisión comercial: no cambia la configuración física ni la preparación de la moto.
 // Si la separación se guarda pero el techo no (respuesta 202), se reintenta solo el techo. Una decisión final no se
-// cambia después. Si la moto ya tiene un techo instalado, solo se admite ese techo o «Por definir».
+// cambia después. Si la moto ya tiene un techo instalado, solo se admite ese techo.
 // Los errores se muestran mientras se escribe.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { mensajeError } from "../../lib/errores";
@@ -148,7 +148,7 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
       setA((x) => ({ ...x, confirmador: x.confirmador || (yoGerente ? f.usuarioActual.codusu : f.gerentes.length === 1 ? f.gerentes[0].codusu : "") }));
       const ini = S.decisionInicial(f.tiposTecho || [], unidad?.preparacion?.techo?.configuracion || "");
       setDecision(ini.decision); setCodtteCon(ini.codtte);
-      // Con un techo instalado, se propone ese mismo techo (es el único compatible además de «Por definir»). Un techo solo
+      // Con un techo instalado, se propone ese mismo techo (es el único compatible). Un techo solo
       // configurado se propone, pero el comprador puede elegir otro (regla del PO del 13/11)
       const fijo = S.techoDeLaMoto(unidad, f.tiposTecho || []);
       if (fijo && S.tiposConTecho(f.tiposTecho || []).some((t) => t.codtte === fijo.codtte)) { setDecision(S.CON_TECHO); setCodtteCon(fijo.codtte); }
@@ -168,7 +168,7 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
   // Techo solo configurado (sin instalar): no restringe, pero si difiere de lo elegido se muestra la diferencia
   const cfg = S.techoConfiguradoDe(unidad, form?.tiposTecho || []);
   const difCfg = S.diferenciaConfigurado(cfg, decision, tipoTecho);
-  // Techo instalado (HU-033): solo ese techo o «Por definir» (la base rechaza lo demás con PT438)
+  // Techo instalado (HU-033): solo ese techo (la base rechaza lo demás con PT438)
   const instaladoBase = S.techoDeLaMoto(unidad, form?.tiposTecho || []);
   const instalado = instaladoBase && tiposCon.some((t) => t.codtte === instaladoBase.codtte) ? instaladoBase : null;
   const adicionalRef = decision === S.CON_TECHO ? S.adicionalDe(tipoTecho) : decision === S.SIN_TECHO ? 0 : null;
@@ -209,7 +209,7 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
     if (decision === S.CON_TECHO && !tipoTecho) e.techo = "Elige el tipo de techo que eligió el comprador.";
     if (decision === S.SIN_TECHO && !tipoTecho) e.techo = "No hay un tipo «Sin techo» activo: elige otra opción.";
     if (!e.techo && !S.compatibleConInstalado(instalado, decision, tipoTecho)) e.techo = S.errorTechoMoto(instalado);
-    if (!form?.responsables.some((r) => r.codusu === responsable)) e.responsable = "Elige quién será responsable de esta separación.";
+    if (!S.responsablesPermitidos(form).some((r) => r.codusu === responsable)) e.responsable = S.esVendedor(form?.usuarioActual) ? "Como vendedor, la separación queda a tu nombre." : "Elige quién será responsable de esta separación.";
     return e;
   }
   const vivos = form ? calcularErrores() : {};
@@ -464,8 +464,8 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
               <fieldset>
                 <legend className="field-label">¿Qué decidió el comprador?</legend>
                 <div className="grid gap-2 sm:grid-cols-3" data-techo-opciones>
-                  <Opcion nombre="sep-techo" valor={S.POR_DEFINIR} actual={decision} titulo="Por definir" texto="Aún no decide. La separación queda activa y el techo se registra después."
-                    onElegir={(v) => { setDecision(v); setErr((p) => ({ ...p, techo: undefined })); }} />
+                  <Opcion nombre="sep-techo" valor={S.POR_DEFINIR} actual={decision} titulo="Por definir" texto={instalado ? "No disponible: el techo ya está instalado, no queda nada por decidir." : "Aún no decide. La separación queda activa y el techo se registra después."}
+                    deshabilitada={Boolean(instalado)} onElegir={(v) => { setDecision(v); setErr((p) => ({ ...p, techo: undefined })); }} />
                   {tipoSin && <Opcion nombre="sep-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `No disponible: esta moto ya tiene un techo instalado.` : "Eligió la moto sin techo. No suma al precio."}
                     deshabilitada={Boolean(instalado)} onElegir={(v) => { setDecision(v); setErr((p) => ({ ...p, techo: undefined })); }} />}
                   {tiposConOfrecidos.length > 0 && <Opcion nombre="sep-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene instalado («${instalado.nombre}»).` : "Eligió un techo. Su adicional se suma al precio al vender."}
@@ -497,10 +497,10 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
             {/* Responsable */}
             <section aria-labelledby="sep-responsable-titulo" className="space-y-3">
               <h3 id="sep-responsable-titulo" className="text-[15px] font-bold text-marino dark:text-white">Responsable</h3>
-              <Campo etiqueta="Quién atiende esta separación" error={ver("responsable")}>
-                <select id="sep-responsable" className="field-input" value={responsable} onChange={(e) => { setResponsable(e.target.value); tocar("responsable"); setErr((p) => ({ ...p, responsable: undefined })); }}>
-                  <option value="">Elige al responsable</option>
-                  {form.responsables.map((r) => <option key={r.codusu} value={r.codusu}>{r.nombre} ({r.rol}){r.codusu === form.usuarioActual.codusu ? ", tú" : ""}</option>)}
+              <Campo etiqueta="Quién atiende esta separación" error={ver("responsable")} ayuda={S.esVendedor(form.usuarioActual) ? "Como vendedor, la separación queda a tu nombre. Solo gerencia o administración la registran para otra persona." : undefined}>
+                <select id="sep-responsable" className="field-input" value={responsable} disabled={S.esVendedor(form.usuarioActual)} data-responsable-fijo={S.esVendedor(form.usuarioActual) ? "1" : undefined} onChange={(e) => { setResponsable(e.target.value); tocar("responsable"); setErr((p) => ({ ...p, responsable: undefined })); }}>
+                  {!S.esVendedor(form.usuarioActual) && <option value="">Elige al responsable</option>}
+                  {S.responsablesPermitidos(form).map((r) => <option key={r.codusu} value={r.codusu}>{r.nombre} ({r.rol}){r.codusu === form.usuarioActual.codusu ? ", tú" : ""}</option>)}
                 </select>
               </Campo>
             </section>

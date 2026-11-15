@@ -117,6 +117,9 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
   await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
   await db.exec(leer('supabase/migrations/202611140005_movimiento_situacion_fisica_comercial.sql'));
+  // QA 14/11: responsable del vendedor y «Por definir» con techo instalado (se puede volver a ejecutar)
+  await db.exec(leer('supabase/migrations/202611150001_hu005_hu006_qa_responsable_y_techo_instalado.sql'));
+  await db.exec(leer('supabase/migrations/202611150001_hu005_hu006_qa_responsable_y_techo_instalado.sql'));
   await db.exec(`INSERT INTO auth.users(id) VALUES ${UUIDS.map(id => `('${id}')`).join(',')};
     INSERT INTO public.rol(nomrol,estrol) VALUES ('Gerente',true),('Administradora',true),('Vendedor',true);
     INSERT INTO public.usuario(uuidusu,codrol,nomusu,apepatusu,corusu,estusu)
@@ -209,7 +212,8 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
       [3, 'Sin techo', 'rechazar'],
       [4, 'Con techo', 'rechazar'],
       [5, 'Con techo', 'permitir'],
-      [6, 'Por definir', 'permitir']
+      // QA 14/11 (CP-006-07/11): con el techo instalado ya no queda nada por definir (PT438)
+      [6, 'Por definir', 'rechazar']
     ] as const) {
       await login(1);
       await configurar(unidadesPrueba[indice + 3]!, tipo['Lona']!);
@@ -220,7 +224,7 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
         : { decision };
       const operacion = () => venta(unidadesPrueba[indice + 3]!, techo,
         decision === 'Con techo' && esperado === 'permitir' ? 200 : decision === 'Con techo' ? 1700 : null);
-      if (esperado === 'rechazar') await assert.rejects(operacion(), error('PT613'));
+      if (esperado === 'rechazar') await assert.rejects(operacion(), error(decision === 'Por definir' ? 'PT438' : 'PT613'));
       else assert.equal((await operacion()).techo.decision, decision);
     }
 
@@ -713,8 +717,9 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   await t.test('HU-022: falla en la segunda actualización del intercambio revierte ambas ventas y el evento', async () => {
     const extra = unidadesHu022;
     await login(3);
-    const ventaA = await venta(extra[6]!, { decision: 'Por definir' });
-    const ventaB = await venta(extra[7]!, { decision: 'Por definir' });
+    // Las dos motos tienen Lona instalada (casos anteriores): se venden con ese techo
+    const ventaA = await venta(extra[6]!, { decision: 'Con techo', codtte: tipo.Lona }, 200);
+    const ventaB = await venta(extra[7]!, { decision: 'Con techo', codtte: tipo.Lona }, 200);
     await propietario(() => db.exec(`CREATE FUNCTION public.hu022_fallar_segunda_venta_test() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN IF NEW.codven = ${ventaB.codven} THEN RAISE EXCEPTION USING ERRCODE='PT699', MESSAGE='Fallo sintético de segunda operación'; END IF; RETURN NEW; END $$;
       CREATE TRIGGER hu022_fallar_segunda_venta_test BEFORE UPDATE OF coduni ON public.venta
@@ -768,5 +773,44 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
       `SELECT jsonb_build_object('ubicacion',u.codubi::text,'techo',u.codtte::text,'proveedor',u.codpro::text,
         'detalleTecho',u.dettecuni,'preparacion',pg_catalog.to_jsonb(p)-'coduni') r
        FROM public.unidad u LEFT JOIN public.preparacionunidad p USING(coduni) WHERE u.coduni=$1`, [extra[10]])), fisicoAntes);
+  });
+  await t.test('QA 14/11 (EMT-156): el vendedor registra a su nombre; con techo instalado no se acepta «Por definir»', async () => {
+    const nuevas = await propietario(async () => {
+      const codcom = await escalar<string>("INSERT INTO public.compra(codmod,codusu,colcom,cancom) VALUES (1,1,'Azul',4) RETURNING codcom::text r");
+      await db.query("INSERT INTO public.factura_compra(codcom,emisor,numero,fecha_emision,cantidad_motos,codusu) VALUES ($1,'QA','QA1411-FAC','2026-11-14',4,1)", [codcom]);
+      await db.query(`INSERT INTO public.unidad(codcom,codmod,nummotuni,chauni,coluni,estcomuni)
+        SELECT $1,1,'QA1411-M-' || n,'QA1411-C-' || n,'Azul','Disponible' FROM generate_series(1,4) n`, [codcom]);
+      return (await db.query<{ coduni: string }>('SELECT coduni::text FROM public.unidad WHERE codcom=$1 ORDER BY coduni', [codcom])).rows.map(r => r.coduni);
+    });
+    const contar = (tabla: string, coduni: string) => propietario(() => escalar<number>(`SELECT count(*)::int r FROM public.${tabla} WHERE coduni=$1`, [coduni]));
+    // Vendedora Dos (codusu 4) intenta registrar a nombre del vendedor 3
+    await login(4);
+    await assert.rejects(venta(nuevas[0]!, { decision: 'Sin techo' }), error('PT626'));
+    await assert.rejects(separar(nuevas[0]!, 'Sin techo'), error('PT443'));
+    assert.equal(await contar('venta', nuevas[0]!), 0);
+    assert.equal(await contar('separacion', nuevas[0]!), 0);
+    assert.equal(await estadoUnidad(nuevas[0]!), 'Disponible');
+    // La administradora sí registra para el vendedor 3; otra vendedora convierte manteniendo a ese responsable
+    await login(2);
+    await separar(nuevas[0]!, 'Sin techo');
+    await login(4);
+    const convertida = await venta(nuevas[0]!, null);
+    assert.equal(convertida.responsable.codusu, '3');
+    assert.equal(await estadoUnidad(nuevas[0]!), 'Vendida');
+    // Con Lona instalada: «Por definir» se rechaza en separación y venta, sin guardar; ese techo sí se acepta
+    await login(1);
+    await configurar(nuevas[1]!, tipo['Lona']!);
+    await configurar(nuevas[2]!, tipo['Lona']!);
+    await propietario(() => db.query("UPDATE public.preparacionunidad SET esttecho='Instalado' WHERE coduni = ANY($1::bigint[])", [[nuevas[1], nuevas[2]]]));
+    await login(3);
+    await assert.rejects(separar(nuevas[1]!, 'Por definir'), error('PT438'));
+    await assert.rejects(venta(nuevas[2]!, { decision: 'Por definir' }), error('PT438'));
+    assert.equal(await contar('separacion', nuevas[1]!), 0);
+    assert.equal(await contar('venta', nuevas[2]!), 0);
+    const conLona = await venta(nuevas[2]!, { decision: 'Con techo', codtte: tipo.Lona }, 200);
+    assert.equal(conLona.techo.codtte, tipo.Lona);
+    // Sin techo instalado, «Por definir» se sigue aceptando
+    const libre = await venta(nuevas[3]!, { decision: 'Por definir' });
+    assert.equal(libre.techo.decision, 'Por definir');
   });
 });

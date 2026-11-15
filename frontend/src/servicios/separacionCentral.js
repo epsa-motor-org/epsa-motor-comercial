@@ -17,12 +17,24 @@ export const MIN_ADELANTO = 100; // mínimo del adelanto (OBS-S3-013, confirmado
 
 // Situaciones en las que la moto ya está comprometida y no se puede separar
 export const COMPROMETIDA = ["Separada", "Vendida"];
-// Una moto se puede separar si está identificada (motor y chasis) y no tiene separación ni venta.
-export const sePuedeSeparar = (u) => Boolean(u?.nummotuni && u?.chauni) && !COMPROMETIDA.includes(u?.comercial);
+// Una moto se puede separar si está identificada (motor y chasis) y está libre para vender. «No disponible» es otra
+// restricción (no está a la venta) y no habilita Separar, igual que en la venta. Un traslado en curso no la bloquea:
+// la moto sigue libre (EMT-157/10158).
+export const sePuedeSeparar = (u) => Boolean(u?.nummotuni && u?.chauni) && u?.comercial === "Libre";
 
 // La API a la que está conectado el panel no tiene las rutas de la HU-005 (responde 404 sin JSON)
 export const FALTA_INSTALAR = "La API conectada todavía no tiene la separación: falta desplegar su versión nueva. Si estás probando en tu computadora, inicia la API de esta rama (npm run dev) y conecta el panel a ella con EPSA_API_LOCAL=1.";
 export const faltaInstalar = (e) => Boolean(e?.detalle?.sinRuta);
+
+// QA 14/11 (EMT-156): un vendedor registra a su nombre; solo gerente y administradora eligen otro responsable. Al
+// convertir una separación, el vendedor puede mantener al responsable que ya tenía la separación. La base lo revisa.
+export const esVendedor = (u) => u?.rol === "Vendedor";
+export function responsablesPermitidos(form, responsableSeparacion = "") {
+  const todos = form?.responsables || [];
+  const yo = form?.usuarioActual;
+  if (!esVendedor(yo)) return todos;
+  return todos.filter((r) => r.codusu === yo.codusu || (responsableSeparacion && r.codusu === String(responsableSeparacion)));
+}
 
 // Datos del formulario: quién soy, responsables, gerentes, tipos de techo y precios de lista
 export const formularioSeparacionApi = () => pedir("/api/separaciones/formulario").then((r) => r.data);
@@ -257,18 +269,19 @@ export function techoConfiguradoDe(unidad, tipos = []) {
   return { codtte: String(tipo?.codtte ?? po.codtte), nombre: tipo?.nombre || nombreCfg || "Techo", instalado: estado === "Instalado", estado };
 }
 // Regla del PO (13/11, EMT-154/10115): solo un techo instalado físicamente restringe la elección del comprador.
-// Una moto con techo instalado solo se separa o vende con ese mismo techo o con el techo «Por definir»
+// Una moto con techo instalado solo se separa o vende con ese mismo techo
 // (CP-006-07 y CP-006-11; la base lo revisa con PT438). Un techo solo configurado, todavía sin instalar, no
 // restringe: se muestra la diferencia para que la configuración se ajuste en la ficha.
 export function techoDeLaMoto(unidad, tipos = []) {
   const x = techoConfiguradoDe(unidad, tipos);
   return x?.instalado ? x : null;
 }
-// Con un techo instalado, una decisión es compatible si es «Por definir» o ese mismo techo
-export const compatibleConInstalado = (instalado, decision, tipo) => !instalado || decision === POR_DEFINIR || (decision === CON_TECHO && String(tipo?.codtte) === instalado.codtte);
+// Con un techo instalado, la única decisión compatible es ese mismo techo. «Por definir» no aplica: el techo ya está
+// puesto y el comprador no puede decidir otro después (CP-006-07/11, QA 14/11; la base responde PT438)
+export const compatibleConInstalado = (instalado, decision, tipo) => !instalado || (decision === CON_TECHO && String(tipo?.codtte) === instalado.codtte);
 export const estadoTechoMoto = (x) => (x?.instalado ? "instalado" : x?.estado === "En proceso" ? "configurado y en armado" : "configurado, por instalar");
-export const textoInstalado = (x) => `Esta moto tiene «${x?.nombre}» instalado. Solo puede venderse o separarse con ese techo (o con el techo por definir). Si el comprador quiere otro techo o la moto sin techo, elige otra moto compatible del mismo modelo e infórmale el plazo estimado de preparación o instalación.`;
-export const errorTechoMoto = (x) => `Esta moto tiene «${x.nombre}» instalado: elige ese techo o «Por definir».`;
+export const textoInstalado = (x) => `Esta moto tiene «${x?.nombre}» instalado. Solo puede venderse o separarse con ese techo. Si el comprador quiere otro techo o la moto sin techo, elige otra moto compatible del mismo modelo e infórmale el plazo estimado de preparación o instalación.`;
+export const errorTechoMoto = (x) => `Esta moto tiene «${x.nombre}» instalado: solo puede llevar ese techo.`;
 // Techo configurado (sin instalar) distinto de lo que eligió el comprador: no impide registrar, pero queda a la vista
 // para corregir la configuración en la ficha. Devuelve el texto o "".
 export function diferenciaConfigurado(cfg, decision, tipo) {

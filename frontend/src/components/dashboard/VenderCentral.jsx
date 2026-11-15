@@ -10,7 +10,7 @@
 // cuadran a la vista: total − adelanto − pagos = saldo. «Sin techo» suma 0; «Por definir» no suma hasta elegirlo.
 // Descuento comercial (HU-006, escenarios 14 a 19): monto, motivo, quién lo autorizó (gerente o administradora) y la
 // confirmación telefónica; el total neto y el saldo los recalcula el servidor.
-// Una moto con techo instalado solo se vende con ese techo (o por definir); un techo solo configurado no lo impide y
+// Una moto con techo instalado solo se vende con ese techo (ni «Sin techo» ni «Por definir»); un techo solo configurado no lo impide y
 // se muestra la diferencia (regla del PO del 13/11). El servidor vuelve a validar todo; si otra persona vendió o separó
 // la moto antes, no se guarda nada y se avisa (409).
 // La venta no mueve la moto, no confirma llegada, preparación ni entrega y no emite comprobantes: si ya se emitió la
@@ -116,7 +116,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
         const ini = S.decisionInicial(tipos, unidad?.preparacion?.techo?.configuracion || "");
         setDecision(ini.decision); setCodtteCon(ini.codtte);
         if (ini.decision === S.CON_TECHO) tipoIni = tipos.find((t) => t.codtte === ini.codtte) || null;
-        // Con un techo instalado, ese techo es el único que se puede vender (además de «Por definir»). Un techo solo
+        // Con un techo instalado, ese techo es el único que se puede vender. Un techo solo
         // configurado se propone, pero el comprador puede elegir otro (regla del PO del 13/11)
         const fijo = S.techoDeLaMoto(unidad, tipos);
         const tipoFijo = fijo ? S.tiposConTecho(tipos).find((t) => t.codtte === fijo.codtte) : null;
@@ -124,7 +124,9 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
       }
       setV((x) => ({
         ...x,
-        responsable: x.responsable || (f.responsables.some((r) => r.codusu === f.usuarioActual.codusu) ? f.usuarioActual.codusu : ""),
+        // Al convertir, se propone el responsable de la separación; si no, quien registra (QA 14/11)
+        responsable: x.responsable || (s?.responsable?.codusu && S.responsablesPermitidos(f, s.responsable.codusu).some((r) => r.codusu === String(s.responsable.codusu)) ? String(s.responsable.codusu)
+          : f.responsables.some((r) => r.codusu === f.usuarioActual.codusu) ? f.usuarioActual.codusu : ""),
         sedeAtencion: x.sedeAtencion || lugar?.codsed || "",
         adicional: x.adicional || (S.adicionalDe(tipoIni) !== null ? montoTexto(S.adicionalDe(tipoIni)) : ""),
       }));
@@ -196,7 +198,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
   function calcularErrores() {
     const e = {};
     if (!conversion) Object.assign(e, Object.fromEntries(Object.entries(S.erroresComprador(nuevo)).map(([k, x]) => [`c_${k}`, x])));
-    if (!form?.responsables.some((r) => r.codusu === v.responsable)) e.responsable = "Elige quién es responsable de esta venta.";
+    if (!S.responsablesPermitidos(form, sep?.responsable?.codusu).some((r) => r.codusu === v.responsable)) e.responsable = S.esVendedor(form?.usuarioActual) ? "Como vendedor, la venta queda a tu nombre." : "Elige quién es responsable de esta venta.";
     if (!sedes?.some((x) => x.codsed === v.sedeAtencion)) e.sedeAtencion = "Elige la sede donde se atendió la venta.";
     const eFecha = V.errorFechaVenta(v.fecha, conversion ? V.fechaLima(sep?.fechaRegistro) : "");
     if (eFecha) e.fecha = eFecha;
@@ -508,11 +510,17 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
                     {sedes.map((x) => <option key={x.codsed} value={x.codsed}>{x.nombre}</option>)}
                   </select>
                 </Campo>
-                <Campo etiqueta="Responsable" error={ver("responsable")}>
-                  <select id="ven-responsable" className="field-input" value={v.responsable} onChange={(e) => cambiarV("responsable", e.target.value)}>
-                    <option value="">Elige al responsable</option>
-                    {form.responsables.map((r) => <option key={r.codusu} value={r.codusu}>{r.nombre} ({r.rol}){r.codusu === yo.codusu ? ", tú" : ""}</option>)}
-                  </select>
+                <Campo etiqueta="Responsable" error={ver("responsable")} ayuda={S.esVendedor(yo) ? "Como vendedor, la venta queda a tu nombre. Solo gerencia o administración la registran para otra persona." : undefined}>
+                  {(() => {
+                    const opciones = S.responsablesPermitidos(form, sep?.responsable?.codusu);
+                    const fijo = S.esVendedor(yo) && opciones.length <= 1;
+                    return (
+                      <select id="ven-responsable" className="field-input" value={v.responsable} disabled={fijo} data-responsable-fijo={fijo ? "1" : undefined} onChange={(e) => cambiarV("responsable", e.target.value)}>
+                        {!fijo && <option value="">Elige al responsable</option>}
+                        {opciones.map((r) => <option key={r.codusu} value={r.codusu}>{r.nombre} ({r.rol}){r.codusu === yo.codusu ? ", tú" : ""}</option>)}
+                      </select>
+                    );
+                  })()}
                 </Campo>
               </div>
               {precio === null && <Aviso tipo="aviso">Esta moto no tiene precio de lista registrado. Pide a gerencia que lo registre en Modelos antes de venderla.</Aviso>}
@@ -531,7 +539,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
                   <fieldset>
                     <legend className="field-label">¿Qué decidió el comprador?</legend>
                     <div className="grid gap-2 sm:grid-cols-3" data-techo-opciones>
-                      <Opcion nombre="ven-techo" valor={S.POR_DEFINIR} actual={decision} titulo="Por definir" texto="Aún no decide. Se registra después, desde la ficha." onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined })); }} />
+                      <Opcion nombre="ven-techo" valor={S.POR_DEFINIR} actual={decision} titulo="Por definir" texto={instalado ? "No disponible: el techo ya está instalado, no queda nada por decidir." : "Aún no decide. Se registra después, desde la ficha."} deshabilitada={Boolean(instalado)} onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined })); }} />
                       {tipoSin && <Opcion nombre="ven-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `No disponible: esta moto ya tiene un techo instalado.` : "Eligió la moto sin techo. No suma al precio."} deshabilitada={Boolean(instalado)} onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined, adicional: undefined })); }} />}
                       {tiposConOfrecidos.length > 0 && <Opcion nombre="ven-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene instalado («${instalado.nombre}»).` : "Eligió un techo: su adicional se suma al total."} onElegir={(x) => { setDecision(x); if (instalado) elegirTipo(instalado.codtte); setErr((p) => ({ ...p, techo: undefined })); }} />}
                     </div>

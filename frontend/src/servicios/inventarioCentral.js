@@ -18,6 +18,17 @@ export function ubicacionDe(u) {
   return { texto: u.ubicacion.nomubi, detalle: TIPO_LUGAR[u.ubicacion.tipubi] || u.ubicacion.tipubi, lugar: u.ubicacion };
 }
 
+// Regla del PO del 14/11 (EMT-26/10156): un traslado no bloquea la venta. Una moto libre en camino se puede separar
+// o vender; el traslado sigue igual y eso no la deja lista para entregar. Texto corto del traslado para acompañar
+// «Libre para vender» (vacío si no tiene traslado activo).
+export function trasladoDe(u) {
+  const mov = u?.movimiento_activo;
+  const destino = mov?.destino?.nomubi || "otra ubicación";
+  if (mov?.estado === "En transito") return `En tránsito a ${destino}`;
+  if (mov?.estado === "Pendiente") return `Traslado programado a ${destino}`;
+  return "";
+}
+
 // Techo: configuración (HU-004) y avance de su instalación (HU-033), por separado
 export function techoDe(p) {
   const t = p?.techo || {};
