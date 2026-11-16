@@ -59,7 +59,7 @@ const migracionHu005AdelantoMinimo = readFileSync(
   'supabase/migrations/202611120003_hu005_adelanto_minimo.sql', 'utf8'
 );
 
-test('HU-005: compatibilidad de techo vive en la migration incremental posterior', () => {
+test('HU-005: la migration histórica de compatibilidad de techo conserva su helper legado', () => {
   assert.doesNotMatch(migracionHu005Integracion, /PT438|hu005_validar_compatibilidad_techo_instalado/);
   assert.match(migracionHu005Integracion, /decisiontecho_solicitada/);
   assert.doesNotMatch(migracionHu005Integracion, /ADD COLUMN IF NOT EXISTS dectechosep/i);
@@ -528,71 +528,6 @@ test('HU-005 PostgreSQL: separación confirmada, idempotencia, concurrencia y se
         'DELETE FROM public.preparacionunidad WHERE coduni=$1', [unidadPorDefinirSinFila]
       ));
       await assert.doesNotReject(crearSeparacion(unidadPorDefinirSinFila, { decisionTecho: 'Por definir' }));
-    });
-
-    await t.test('techo físicamente instalado impone compatibilidad en POST y en la resolución PUT', async () => {
-      await login(1);
-      const tipoB = await administrativo(() => escalar<number>(
-        "INSERT INTO public.tipotecho(nomtte) VALUES ('Techo QA tipo B') RETURNING codtte r"
-      ));
-      const instalarTechoA = async (etiqueta: string) => {
-        const unidad = await crearUnidad(etiqueta);
-        await administrativo(() => db.query(
-          "UPDATE public.preparacionunidad SET esttecho='Instalado' WHERE coduni=$1", [unidad]
-        ));
-        return unidad;
-      };
-
-      const unidadPorDefinir = await instalarTechoA('INSTALADO-POR-DEFINIR');
-      const techoPorDefinir = await crearSeparacion(unidadPorDefinir, { decisionTecho: 'Por definir' });
-      assert.equal(techoPorDefinir.techo.decision, 'Por definir');
-
-      const unidadTipoA = await instalarTechoA('INSTALADO-MISMO-TIPO');
-      const techoTipoA = await crearSeparacion(unidadTipoA, { decisionTecho: 'Con techo', codtte: 1 });
-      assert.deepEqual(techoTipoA.techo, { decision: 'Con techo', codtte: '1', guardado: true });
-
-      for (const [etiqueta, decisionTecho, codtte] of [
-        ['INSTALADO-OTRO-TIPO-POST', 'Con techo', tipoB],
-        ['INSTALADO-SIN-TECHO-POST', 'Sin techo', null]
-      ] as const) {
-        const unidad = await instalarTechoA(etiqueta);
-        const unidadAntes = await operativo(unidad);
-        const prepAntes = await preparacion(unidad);
-        await assert.rejects(crearSeparacion(unidad, { decisionTecho, codtte }), error('PT438'));
-        assert.deepEqual(await operativo(unidad), unidadAntes);
-        assert.deepEqual(await preparacion(unidad), prepAntes);
-        assert.equal(await administrativo(() => escalar<number>(
-          'SELECT count(*)::int r FROM public.separacion WHERE coduni=$1', [unidad]
-        )), 0, 'rechazar una decisión incompatible revierte separación y adelanto');
-        assert.equal(await administrativo(() => escalar<number>(
-          'SELECT count(*)::int r FROM public.unidad WHERE coduni=$1', [unidad]
-        )), 1, 'la operación no cambia automáticamente a otra unidad');
-      }
-
-      for (const [etiqueta, decision, codtte] of [
-        ['INSTALADO-OTRO-TIPO-PUT', 'Con techo', tipoB],
-        ['INSTALADO-SIN-TECHO-PUT', 'Sin techo', null]
-      ] as const) {
-        const unidad = await instalarTechoA(etiqueta);
-        const unidadAntes = await operativo(unidad);
-        const prepAntes = await preparacion(unidad);
-        const separacion = await crearSeparacion(unidad, { decisionTecho: 'Por definir' });
-        const cuentaAntes = await administrativo(() => escalar<{ cantidad: number; adelanto: number }>(
-          'SELECT jsonb_build_object(\'cantidad\',count(*)::int,\'adelanto\',coalesce(sum(monadesep),0)) r '
-            + 'FROM public.separacion WHERE coduni=$1', [unidad]
-        ));
-        await assert.rejects(guardarTecho(separacion.codsep, decision, codtte), error('PT438'));
-        const cuentaDespues = await administrativo(() => escalar<{ cantidad: number; adelanto: number }>(
-          'SELECT jsonb_build_object(\'cantidad\',count(*)::int,\'adelanto\',coalesce(sum(monadesep),0)) r '
-            + 'FROM public.separacion WHERE coduni=$1', [unidad]
-        ));
-        assert.deepEqual(cuentaDespues, cuentaAntes, 'el PUT rechazado no duplica separación ni adelanto');
-        assert.deepEqual(await operativo(unidad), { ...unidadAntes, estcomuni: 'Separada' });
-        assert.deepEqual(await preparacion(unidad), prepAntes);
-        const actual = await resumenSeparacion(separacion.codsep);
-        assert.equal(actual.decision, 'Por definir', 'la decisión inicial permanece resoluble tras el rechazo');
-        assert.equal(actual.tipo, null);
-      }
     });
 
     await t.test('resolver Por definir con tipo inválido/inactivo falla y deja la elección sin resolver', async () => {

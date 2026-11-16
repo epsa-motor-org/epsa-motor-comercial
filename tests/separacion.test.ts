@@ -378,11 +378,12 @@ test('HU-005 API: errores de concurrencia comercial se traducen a 409', async ()
   }
 });
 
-test('HU-005 API: ingreso no confirmado, efectivo sin observación y responsable inválido conservan errores esperados', async () => {
+test('HU-005 API: ingreso, observación, responsable y responsable suplantado conservan errores esperados', async () => {
   const casos: Array<[unknown, string, number]> = [
     [{ ...requestValido, ingresoConfirmado: false }, 'PT427', 422],
     [{ ...requestValido, medioPago: 'Efectivo', referencia: null, rutaEvidencia: null, observacion: null }, 'PT428', 422],
-    [requestValido, 'PT407', 422]
+    [requestValido, 'PT407', 422],
+    [requestValido, 'PT443', 403]
   ];
   for (const [body, code, status] of casos)
     await entorno(async request => assert.equal((await request(body)).status, status, code), () => errorRPC(code));
