@@ -18,6 +18,17 @@ export function ubicacionDe(u) {
   return { texto: u.ubicacion.nomubi, detalle: TIPO_LUGAR[u.ubicacion.tipubi] || u.ubicacion.tipubi, lugar: u.ubicacion };
 }
 
+// Regla del PO del 14/11 (EMT-26/10156): un traslado no bloquea la venta. Una moto libre en camino se puede separar
+// o vender; el traslado sigue igual y eso no la deja lista para entregar. Texto corto del traslado para acompañar
+// «Libre para vender» (vacío si no tiene traslado activo).
+export function trasladoDe(u) {
+  const mov = u?.movimiento_activo;
+  const destino = mov?.destino?.nomubi || "otra ubicación";
+  if (mov?.estado === "En transito") return `En tránsito a ${destino}`;
+  if (mov?.estado === "Pendiente") return `Traslado programado a ${destino}`;
+  return "";
+}
+
 // Techo: configuración (HU-004) y avance de su instalación (HU-033), por separado
 export function techoDe(p) {
   const t = p?.techo || {};
@@ -69,20 +80,21 @@ export function etapaOperativa(po) {
 // comprador. Si el techo sigue «Por definir», o si eligió un techo que la moto todavía no tiene configurado, no figura
 // «Lista para entrega» aunque su preparación física no tenga pendientes. Solo cambia lo que se muestra: la venta no
 // configura, instala, arma ni entrega nada. c = { decision, codtte, nombre, requiereInstalacion, origen }.
-// Regla del PO del 13/11: un techo solo configurado no impide vender o separar con otra elección; la diferencia entre
-// lo configurado y lo acordado queda a la vista («Techo distinto al acordado») para corregir la configuración.
+// Regla final del PO (15/11, HU-006 escenarios 13 y 23): el techo de la moto, instalado o configurado, no impide vender
+// con otra elección; la diferencia queda a la vista como adecuación pendiente («Techo distinto al acordado») hasta que
+// se registre el cambio físico en Preparación. El techo anterior no cuenta como el nuevo.
 export function etapaComercialDe(po, c) {
   if (!c) return null;
   const quien = c.origen === "Venta" ? "El comprador" : "El comprador de la separación";
   const t = po?.techo || {};
   const otro = t.codtte && t.requiereInstalacion ? t : null; // techo configurado en la moto (no «Sin techo»)
   const como = otro?.estado === "Instalado" ? "instalado" : "configurado";
-  if (c.decision === "Por definir") return { etapa: "Techo por definir", tono: "ambar", nota: `${quien} aún no decide el techo. Cuando lo elija, se programa su instalación.` };
+  if (c.decision === "Por definir") return { etapa: "Techo por definir", tono: "ambar", nota: otro?.estado === "Instalado" ? `${quien} aún no decide si conserva «${otro.configuracion || "el techo"}» instalado o lo cambia. No se puede entregar hasta que decida.` : `${quien} aún no decide el techo. Cuando lo elija, se programa su instalación.` };
   if (c.decision === "Sin techo" && otro) {
-    return { etapa: "Techo distinto al acordado", tono: "ambar", nota: `${quien} la quiere sin techo, pero la moto tiene «${otro.configuracion || "un techo"}» ${como}: corrige la configuración de techo en la ficha.` };
+    return { etapa: "Techo distinto al acordado", tono: "ambar", nota: `Adecuación pendiente: ${quien.toLowerCase()} la quiere sin techo y la moto tiene «${otro.configuracion || "un techo"}» ${como}. Cambia la configuración en la ficha y registra el retiro en Preparación antes de entregar.` };
   }
   if (c.decision === "Con techo" && String(t.codtte || "") !== String(c.codtte || "")) {
-    if (otro) return { etapa: "Techo distinto al acordado", tono: "ambar", nota: `${quien} eligió ${c.nombre || "un techo"}, pero la moto tiene «${otro.configuracion || "otro techo"}» ${como}: cambia la configuración de techo en la ficha.` };
+    if (otro) return { etapa: "Techo distinto al acordado", tono: "ambar", nota: `Adecuación pendiente: ${quien.toLowerCase()} eligió ${c.nombre || "un techo"} y la moto tiene «${otro.configuracion || "otro techo"}» ${como}. Cambia la configuración en la ficha y registra el cambio en Preparación antes de entregar.` };
     if (c.requiereInstalacion) return { etapa: "Techo elegido sin programar", tono: "ambar", nota: `${quien} eligió ${c.nombre || "un techo"}: configúralo en «Configuración de techo» de la ficha para programar su instalación.` };
   }
   return null;

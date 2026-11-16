@@ -71,7 +71,9 @@ export function compatibilidadMoto(cand, { actual, venta, form }) {
   const t = venta?.techo || {};
   const tipo = t.codtte ? { codtte: String(t.codtte) } : null;
   const instalado = techoDeLaMoto(cand, tipos);
-  if (instalado && !compatibleConInstalado(instalado, t.decision, tipo)) {
+  // Corregir no es una decisión nueva del comprador: una venta «Por definir» puede pasar a una moto con techo instalado
+  // (al elegir el techo, solo se le ofrecerá ese). La base de HU-022 aplica la misma regla.
+  if (instalado && t.decision !== POR_DEFINIR && !compatibleConInstalado(instalado, t.decision, tipo)) {
     return { ok: false, motivo: `Tiene «${instalado.nombre}» instalado y la venta es ${t.decision === SIN_TECHO ? "sin techo" : "con otro techo"}.` };
   }
   return { ok: true, aviso: diferenciaTecho(techoConfiguradoDe(cand, tipos), t, tipos) };
@@ -124,6 +126,8 @@ export function errorCorreccion(er) {
     return { texto: "No se cambió: solo el gerente y la administradora corrigen ventas." };
   }
   if (st === 404) return { texto: "No se encontró esta venta. Actualiza la ficha.", bloquear: true };
+  // HU-032: con la entrega registrada no hay corrección ordinaria (PT700)
+  if (/entrega efectiva/i.test(msg)) return { texto: "Esta venta ya tiene la entrega registrada: no se corrige el comprador ni la moto. Si hay que revertirla, se cancela la venta con la decisión del gerente.", bloquear: true };
   if (/cambi[oó] desde la consulta|relaci[oó]n cambi/i.test(msg)) return { texto: "Otra persona cambió esta venta mientras la revisabas. Se volvió a leer: revisa los datos y confirma de nuevo.", recargar: true };
   if (/no cambia/i.test(msg)) return { texto: "La corrección no cambia nada: elige otro comprador u otra moto." };
   if (/idempotency/i.test(msg)) return { texto: "Este intento ya se usó con otros datos. Vuelve a confirmar para enviarlo como un intento nuevo.", nuevaClave: true };
@@ -142,8 +146,12 @@ export function errorCorreccion(er) {
 }
 
 // Texto de cómo quedó una moto
-const ESTADO = { Disponible: "libre para vender", Vendida: "vendida", Separada: "separada (tiene otra separación activa)", "No disponible": "no disponible (tiene un traslado en curso)" };
-export const textoEstado = (e) => ESTADO[e] || String(e || "sin dato").toLowerCase();
+// Un traslado en curso no bloquea: la moto anterior queda libre y el traslado sigue (regla del PO del 14/11)
+const ESTADO = { Disponible: "libre para vender", Vendida: "vendida", Separada: "separada (tiene otra separación activa)", "No disponible": "no disponible para vender" };
+export const textoEstado = (e, traslado = "") => {
+  const texto = ESTADO[e] || String(e || "sin dato").toLowerCase();
+  return e === "Disponible" && traslado ? `${texto} · ${traslado.charAt(0).toLowerCase()}${traslado.slice(1)}` : texto;
+};
 export const textoMoto = (m) => (m ? `${m.modelo || m.nommod || "Moto"} · motor ${m.motor || m.nummotuni || "—"}` : "Sin dato");
 export const detalleMoto = (m) => (m ? [m.color || m.coluni, (m.chasis || m.chauni) && `chasis ${m.chasis || m.chauni}`].filter(Boolean).join(" · ") : "");
 export const textoTipo = (t) => (t === "Intercambio" ? "Intercambio de motos entre dos ventas" : "Corrección de la venta");

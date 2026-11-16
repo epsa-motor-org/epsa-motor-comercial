@@ -17,12 +17,24 @@ export const MIN_ADELANTO = 100; // mínimo del adelanto (OBS-S3-013, confirmado
 
 // Situaciones en las que la moto ya está comprometida y no se puede separar
 export const COMPROMETIDA = ["Separada", "Vendida"];
-// Una moto se puede separar si está identificada (motor y chasis) y no tiene separación ni venta.
-export const sePuedeSeparar = (u) => Boolean(u?.nummotuni && u?.chauni) && !COMPROMETIDA.includes(u?.comercial);
+// Una moto se puede separar si está identificada (motor y chasis) y está libre para vender. «No disponible» es otra
+// restricción (no está a la venta) y no habilita Separar, igual que en la venta. Un traslado en curso no la bloquea:
+// la moto sigue libre (EMT-157/10158).
+export const sePuedeSeparar = (u) => Boolean(u?.nummotuni && u?.chauni) && u?.comercial === "Libre";
 
 // La API a la que está conectado el panel no tiene las rutas de la HU-005 (responde 404 sin JSON)
 export const FALTA_INSTALAR = "La API conectada todavía no tiene la separación: falta desplegar su versión nueva. Si estás probando en tu computadora, inicia la API de esta rama (npm run dev) y conecta el panel a ella con EPSA_API_LOCAL=1.";
 export const faltaInstalar = (e) => Boolean(e?.detalle?.sinRuta);
+
+// HU-006 escenario 20 (PO 15/11): un vendedor registra a su nombre; solo gerente y administradora eligen otro
+// responsable. Al convertir una separación se puede mantener al responsable que ya tenía. El servidor lo valida.
+export const esVendedor = (u) => u?.rol === "Vendedor";
+export function responsablesPermitidos(form, responsableSeparacion = "") {
+  const todos = form?.responsables || [];
+  const yo = form?.usuarioActual;
+  if (!esVendedor(yo)) return todos;
+  return todos.filter((r) => r.codusu === yo.codusu || (responsableSeparacion && r.codusu === String(responsableSeparacion)));
+}
 
 // Datos del formulario: quién soy, responsables, gerentes, tipos de techo y precios de lista
 export const formularioSeparacionApi = () => pedir("/api/separaciones/formulario").then((r) => r.data);
@@ -256,10 +268,8 @@ export function techoConfiguradoDe(unidad, tipos = []) {
   const estado = po?.estado || unidad?.preparacion?.techo?.avance || "Pendiente";
   return { codtte: String(tipo?.codtte ?? po.codtte), nombre: tipo?.nombre || nombreCfg || "Techo", instalado: estado === "Instalado", estado };
 }
-// Regla del PO (13/11, EMT-154/10115): solo un techo instalado físicamente restringe la elección del comprador.
-// Una moto con techo instalado solo se separa o vende con ese mismo techo o con el techo «Por definir»
-// (CP-006-07 y CP-006-11; la base lo revisa con PT438). Un techo solo configurado, todavía sin instalar, no
-// restringe: se muestra la diferencia para que la configuración se ajuste en la ficha.
+// Techo instalado físicamente (HU-033). Desde el 15/11 ya no restringe la separación ni la venta (queda la adecuación
+// pendiente); la corrección de HU-022 sí lo usa para elegir una moto compatible con lo vendido.
 export function techoDeLaMoto(unidad, tipos = []) {
   const x = techoConfiguradoDe(unidad, tipos);
   return x?.instalado ? x : null;
@@ -267,8 +277,6 @@ export function techoDeLaMoto(unidad, tipos = []) {
 // Con un techo instalado, una decisión es compatible si es «Por definir» o ese mismo techo
 export const compatibleConInstalado = (instalado, decision, tipo) => !instalado || decision === POR_DEFINIR || (decision === CON_TECHO && String(tipo?.codtte) === instalado.codtte);
 export const estadoTechoMoto = (x) => (x?.instalado ? "instalado" : x?.estado === "En proceso" ? "configurado y en armado" : "configurado, por instalar");
-export const textoInstalado = (x) => `Esta moto tiene «${x?.nombre}» instalado. Solo puede venderse o separarse con ese techo (o con el techo por definir). Si el comprador quiere otro techo o la moto sin techo, elige otra moto compatible del mismo modelo e infórmale el plazo estimado de preparación o instalación.`;
-export const errorTechoMoto = (x) => `Esta moto tiene «${x.nombre}» instalado: elige ese techo o «Por definir».`;
 // Techo configurado (sin instalar) distinto de lo que eligió el comprador: no impide registrar, pero queda a la vista
 // para corregir la configuración en la ficha. Devuelve el texto o "".
 export function diferenciaConfigurado(cfg, decision, tipo) {
@@ -277,6 +285,23 @@ export function diferenciaConfigurado(cfg, decision, tipo) {
   if (decision === CON_TECHO && tipo && String(tipo.codtte) !== cfg.codtte) return `La moto tiene «${cfg.nombre}» ${estadoTechoMoto(cfg)} y el comprador eligió «${tipo.nombre}». Se puede registrar así; después hay que cambiar la configuración de techo en la ficha.`;
   return "";
 }
+// HU-006 · Regla final del PO (15/11, EMT-11/10202): en una VENTA (directa, desde separación o al elegir después el
+// techo) el comprador puede quedarse con el techo que la moto ya tiene, dejarlo por definir, pedir otro o ninguno,
+// aunque haya uno instalado. La venta guarda lo acordado y no cambia la moto: el trabajo físico queda pendiente y se
+// registra en Preparación (HU-033); la entrega (HU-032) exige que coincida. Se cobra un solo techo: el final.
+// Lo mismo en la separación (contrato de Michelle del 15/11, HU-005): la decisión comercial no depende del techo físico.
+export const textoInstaladoVenta = (x, que = "venta") => `Esta moto tiene «${x?.nombre}» instalado. El comprador puede conservarlo, dejar el techo por definir o pedir otro techo o ninguno: la ${que} registra lo acordado y no cambia la moto. Si elige otra cosa, el cambio queda pendiente y se programa en Preparación antes de entregar.`;
+// Techo físico (instalado o configurado) frente a lo que acordó el comprador: texto de la adecuación pendiente o "".
+// «Por definir» con un techo instalado deja pendiente la decisión (conservarlo o cambiarlo).
+export function adecuacionPendiente(fisico, decision, tipo) {
+  if (!fisico || !decision) return "";
+  const como = estadoTechoMoto(fisico);
+  if (decision === POR_DEFINIR) return fisico.instalado ? `La moto tiene «${fisico.nombre}» instalado y el comprador aún no decide si lo conserva o lo cambia. Queda pendiente su decisión antes de entregar.` : "";
+  if (decision === SIN_TECHO) return `La moto tiene «${fisico.nombre}» ${como} y el comprador la quiere sin techo. Queda pendiente retirarlo o cambiar la configuración en la ficha antes de entregar; la venta no cambia la moto.`;
+  if (decision === CON_TECHO && tipo && String(tipo.codtte) !== fisico.codtte) return `La moto tiene «${fisico.nombre}» ${como} y el comprador eligió «${tipo.nombre}». Queda pendiente el cambio de techo (se programa en la ficha y en Preparación) antes de entregar; se cobra solo el techo elegido.`;
+  return "";
+}
+
 // Adicional referencial de un tipo de techo (catálogo único, regla del PO del 11 de noviembre)
 export const adicionalDe = (t) => (t && t.adicionalReferencial !== null && t.adicionalReferencial !== undefined && Number.isFinite(Number(t.adicionalReferencial)) ? Number(t.adicionalReferencial) : null);
 // Rótulo de una fila de cuentas: «Techo clásico de fibra», «Techo lona», «Techo fibra clásica equipada»

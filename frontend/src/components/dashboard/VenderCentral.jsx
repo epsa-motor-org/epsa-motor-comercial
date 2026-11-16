@@ -3,16 +3,19 @@
 //   · Venta directa de una moto libre: comprador (nombres, apellidos y celular, sin documento; se puede completar
 //     desde un interesado), techo (por definir, sin techo o con techo) y pagos recibidos.
 //   · Venta desde una separación del mismo comprador: se conserva su adelanto (no se vuelve a sumar como pago) y su
-//     decisión de techo; la separación queda convertida y deja de bloquear la moto.
+//     decisión de techo, que antes de confirmar se puede actualizar con el comprador (PO 15/11, escenario 12); la
+//     separación queda convertida y deja de bloquear la moto.
 // Siempre se guardan responsable, sede de atención, fecha, modalidad (contado o crédito) y la entrega prevista.
 // Desglose (contrato de Michelle del 12 de noviembre): precio base (lista del modelo, no se escribe) + adicional del
 // techo (el referencial del tipo, o el que se acordó con el comprador) = total, que calcula el servidor. Los números
 // cuadran a la vista: total − adelanto − pagos = saldo. «Sin techo» suma 0; «Por definir» no suma hasta elegirlo.
 // Descuento comercial (HU-006, escenarios 14 a 19): monto, motivo, quién lo autorizó (gerente o administradora) y la
 // confirmación telefónica; el total neto y el saldo los recalcula el servidor.
-// Una moto con techo instalado solo se vende con ese techo (o por definir); un techo solo configurado no lo impide y
-// se muestra la diferencia (regla del PO del 13/11). El servidor vuelve a validar todo; si otra persona vendió o separó
-// la moto antes, no se guarda nada y se avisa (409).
+// Techo (regla final del PO del 15/11, escenarios 12, 13, 22 a 24): aunque la moto tenga un techo instalado, el
+// comprador puede conservarlo, dejarlo por definir o pedir otro techo o ninguno. Se muestran por separado el techo de
+// la moto, lo acordado y la adecuación pendiente; la venta no cambia la moto y se cobra un solo techo, el final.
+// Vendedor: queda fijo como responsable (escenario 20). El servidor vuelve a validar todo; si otra persona vendió o
+// separó la moto antes, no se guarda nada y se avisa (409).
 // La venta no mueve la moto, no confirma llegada, preparación ni entrega y no emite comprobantes: si ya se emitió la
 // boleta o factura fuera de la plataforma, se registra su serie, número y fecha reales.
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -27,6 +30,8 @@ import { IconCheck } from "../Icons";
 import { BuscarInteresado, CabeceraMoto, ElegirTechoModal, Opcion, VistaCaptura } from "./SepararCentral";
 import { BotonCancelar, NotaPermisoCancelar } from "./CancelarCentral";
 import { BotonCorregir } from "./CorregirCentral";
+import { EntregaVenta } from "./EntregaCentral";
+import * as E from "../../servicios/entregaCentral";
 import { VENTA } from "../../servicios/cancelacionCentral";
 
 const NO_CONFIRMADO = "No se pudo confirmar si la venta se guardó porque falló la conexión. Vuelve a pulsar «Registrar venta»: este mismo envío no se registrará dos veces.";
@@ -90,6 +95,8 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
   const [nuevo, setNuevo] = useState(COMPRADOR_VACIO); const [registrado, setRegistrado] = useState(null); const [desdeLead, setDesdeLead] = useState(null);
   const [v, setV] = useState({ responsable: "", sedeAtencion: "", fecha: S.hoyLima(), modalidad: "", adicional: "", sedeEntrega: "", entrega: "", observacion: "" });
   const [decision, setDecision] = useState(S.POR_DEFINIR); const [codtteCon, setCodtteCon] = useState("");
+  // Conversión: actualizar con el comprador la elección de techo de la separación antes de confirmar
+  const [cambiaTecho, setCambiaTecho] = useState(false);
   const [pagos, setPagos] = useState([]);
   const [evidencias, setEvidencias] = useState({}); // id del pago → { firma, ruta } ya guardada
   const [comp, setComp] = useState({ tiene: false, referencia: "", fecha: "" });
@@ -111,20 +118,24 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
       // Adicional propuesto: el referencial del techo (de la separación o el de la moto)
       const tipos = f.tiposTecho || [];
       let tipoIni = null;
-      if (s) tipoIni = s.decisionTecho?.decision === S.CON_TECHO ? tipos.find((t) => t.codtte === String(s.decisionTecho.codtte)) || null : null;
-      else {
+      if (s) {
+        tipoIni = s.decisionTecho?.decision === S.CON_TECHO ? tipos.find((t) => t.codtte === String(s.decisionTecho.codtte)) || null : null;
+        // Si se actualiza la elección, se parte de la que tenía la separación
+        setDecision(s.decisionTecho?.decision || S.POR_DEFINIR); setCodtteCon(tipoIni?.codtte || "");
+      } else {
         const ini = S.decisionInicial(tipos, unidad?.preparacion?.techo?.configuracion || "");
         setDecision(ini.decision); setCodtteCon(ini.codtte);
         if (ini.decision === S.CON_TECHO) tipoIni = tipos.find((t) => t.codtte === ini.codtte) || null;
-        // Con un techo instalado, ese techo es el único que se puede vender (además de «Por definir»). Un techo solo
-        // configurado se propone, pero el comprador puede elegir otro (regla del PO del 13/11)
+        // Con un techo instalado se propone conservarlo; el comprador puede elegir otra cosa (PO 15/11)
         const fijo = S.techoDeLaMoto(unidad, tipos);
         const tipoFijo = fijo ? S.tiposConTecho(tipos).find((t) => t.codtte === fijo.codtte) : null;
         if (tipoFijo) { setDecision(S.CON_TECHO); setCodtteCon(tipoFijo.codtte); tipoIni = tipoFijo; }
       }
       setV((x) => ({
         ...x,
-        responsable: x.responsable || (f.responsables.some((r) => r.codusu === f.usuarioActual.codusu) ? f.usuarioActual.codusu : ""),
+        // Al convertir se propone el responsable de la separación; si no, quien registra (escenario 20)
+        responsable: x.responsable || (s?.responsable?.codusu && S.responsablesPermitidos(f, s.responsable.codusu).some((r) => r.codusu === String(s.responsable.codusu)) ? String(s.responsable.codusu)
+          : f.responsables.some((r) => r.codusu === f.usuarioActual.codusu) ? f.usuarioActual.codusu : ""),
         sedeAtencion: x.sedeAtencion || lugar?.codsed || "",
         adicional: x.adicional || (S.adicionalDe(tipoIni) !== null ? montoTexto(S.adicionalDe(tipoIni)) : ""),
       }));
@@ -138,15 +149,17 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
   const adelanto = conversion && sep?.ingresoConfirmado ? V.redondear(Number(sep.monto) || 0) : 0;
   const totalPagos = V.redondear(pagos.reduce((a, p) => a + valor(p.monto), 0));
 
-  // Techo (en venta directa se elige; desde una separación se mantiene su decisión)
+  // Techo: en venta directa se elige; desde una separación se mantiene su decisión, salvo que se actualice con el
+  // comprador antes de confirmar. El techo de la moto no restringe la elección (PO 15/11): queda la adecuación pendiente.
   const tipoTecho = S.tipoDeDecision(form?.tiposTecho, decision, codtteCon);
   const tipoSin = S.tipoSinTecho(form?.tiposTecho);
   const tiposCon = S.tiposConTecho(form?.tiposTecho);
   const instaladoBase = S.techoDeLaMoto(unidad, form?.tiposTecho || []);
   const instalado = instaladoBase && tiposCon.some((t) => t.codtte === instaladoBase.codtte) ? instaladoBase : null;
-  const tiposConOfrecidos = instalado ? tiposCon.filter((t) => t.codtte === instalado.codtte) : tiposCon;
-  const decisionFinal = conversion ? sep?.decisionTecho?.decision || "" : decision;
-  const tipoFinal = conversion ? (decisionFinal === S.CON_TECHO ? (form?.tiposTecho || []).find((t) => t.codtte === String(sep?.decisionTecho?.codtte)) || null : null) : tipoTecho;
+  const eligeTecho = !conversion || cambiaTecho;
+  const decisionFinal = eligeTecho ? decision : sep?.decisionTecho?.decision || "";
+  const tipoFinal = eligeTecho ? tipoTecho : (decisionFinal === S.CON_TECHO ? (form?.tiposTecho || []).find((t) => t.codtte === String(sep?.decisionTecho?.codtte)) || null : null);
+  const techoDeSeparacionCambio = conversion && cambiaTecho && (decision !== sep?.decisionTecho?.decision || (decision === S.CON_TECHO && String(tipoTecho?.codtte || "") !== String(sep?.decisionTecho?.codtte || "")));
   const nombreTechoFinal = tipoFinal?.nombre || (conversion ? sep?.decisionTecho?.nombre : "") || "";
   const referencial = decisionFinal === S.CON_TECHO ? V.adicionalReferencialDe(tipoFinal) : null;
   // Desglose: base + adicional = total (el servidor lo vuelve a calcular)
@@ -161,8 +174,8 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
   const { total, saldo } = V.cuentasVenta({ base: precio, adicional: adicionalValido ? nAdicional : NaN, descuento: descVista, adelanto, pagos: totalPagos });
   const totalVista = adicionalValido && descValido ? total : null;
   const saldoVista = adicionalValido && descValido ? saldo : null;
-  // Techo solo configurado (sin instalar) distinto de lo elegido: se puede vender así, pero queda a la vista
-  const difCfg = conversion ? "" : S.diferenciaConfigurado(S.techoConfiguradoDe(unidad, form?.tiposTecho || []), decision, tipoTecho);
+  // Techo de la moto (instalado o configurado) distinto de lo acordado: se vende así y queda la adecuación pendiente
+  const difCfg = S.adecuacionPendiente(S.techoConfiguradoDe(unidad, form?.tiposTecho || []), decisionFinal, tipoFinal);
   const disponiblePara = (id) => (totalVista !== null ? V.redondear(totalVista - adelanto - pagos.filter((p) => p.id !== id).reduce((a, p) => a + valor(p.monto), 0)) : undefined);
   const elegirTipo = (codtte) => { setCodtteCon(codtte); const t = tiposCon.find((x) => x.codtte === codtte); setV((p) => ({ ...p, adicional: S.adicionalDe(t) !== null ? montoTexto(S.adicionalDe(t)) : "" })); setErr((p) => ({ ...p, techo: undefined, adicional: undefined })); };
   const gerentes = form?.gerentes || [];
@@ -196,18 +209,17 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
   function calcularErrores() {
     const e = {};
     if (!conversion) Object.assign(e, Object.fromEntries(Object.entries(S.erroresComprador(nuevo)).map(([k, x]) => [`c_${k}`, x])));
-    if (!form?.responsables.some((r) => r.codusu === v.responsable)) e.responsable = "Elige quién es responsable de esta venta.";
+    if (!S.responsablesPermitidos(form, sep?.responsable?.codusu).some((r) => r.codusu === v.responsable)) e.responsable = S.esVendedor(form?.usuarioActual) ? "Como vendedor, la venta queda a tu nombre." : "Elige quién es responsable de esta venta.";
     if (!sedes?.some((x) => x.codsed === v.sedeAtencion)) e.sedeAtencion = "Elige la sede donde se atendió la venta.";
     const eFecha = V.errorFechaVenta(v.fecha, conversion ? V.fechaLima(sep?.fechaRegistro) : "");
     if (eFecha) e.fecha = eFecha;
     if (!V.MODALIDADES.includes(v.modalidad)) e.modalidad = "Elige si la venta es al contado o a crédito.";
     if (precio === null) e.precio = "Esta moto no tiene precio de lista registrado. Pide a gerencia que lo registre en Modelos antes de venderla.";
-    if (!conversion) {
+    if (eligeTecho) {
       if (decision === S.CON_TECHO && !tipoTecho) e.techo = "Elige el tipo de techo que eligió el comprador.";
       if (decision === S.SIN_TECHO && !tipoTecho) e.techo = "No hay un tipo «Sin techo» activo: elige otra opción.";
-      if (!e.techo && !S.compatibleConInstalado(instalado, decision, tipoTecho)) e.techo = S.errorTechoMoto(instalado);
     }
-    if (decisionFinal === S.CON_TECHO && (conversion || tipoTecho)) {
+    if (decisionFinal === S.CON_TECHO && (!eligeTecho || tipoTecho)) {
       const eA = V.errorAdicional(v.adicional, referencial);
       if (eA) e.adicional = eA;
     }
@@ -308,7 +320,8 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
         pagos: pagos.map((p) => (p.medio === "Transferencia"
           ? { monto: S.montoParaEnviar(p.monto), fecha: p.fecha, medioPago: "Transferencia", referencia: S.limpio(p.referencia), rutaEvidencia: rutas[p.id], observacion: S.limpio(p.observacion) || null, ingresoConfirmado: true, codusuConfirmador: Number(p.confirmador) }
           : { monto: S.montoParaEnviar(p.monto), fecha: p.fecha, medioPago: "Efectivo", observacion: S.limpio(p.observacion), ingresoConfirmado: true })),
-        techo: conversion ? null : S.techoParaEnviar(decision, tipoTecho),
+        // Desde una separación sin cambios, la venta hereda su techo; si se actualizó con el comprador, se envía
+        techo: eligeTecho ? S.techoParaEnviar(decision, tipoTecho) : null,
         ...(comp.tiene ? { comprobanteExterno: { referencia: comp.referencia, fecha: comp.fecha } } : {}),
         observacion: obsCompuesta || null,
       };
@@ -342,7 +355,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
         setErr({ general: `${mensajeError(er)}. No se guardó esta venta: la moto cambió antes (otra persona la vendió o la separó, se canceló su separación o ya quedó guardado un intento anterior). Revisa su ficha.` });
       } else if (campo === "adicional") setErr({ adicional: mensajeError(er) });
       else if (campo === "descuento") setErr({ descuento: mensajeError(er) });
-      else if (campo === "techo") setErr({ techo: mensajeError(er) });
+      else if (campo === "techo") setErr({ techo: V.textoErrorTecho(er, { cambioSeparacion: techoDeSeparacionCambio, instalado }) });
       else if (campo === "comprobante") setErr({ compReferencia: mensajeError(er) });
       else if (campo === "responsable") setErr({ responsable: mensajeError(er) });
       else if (campo === "sede") setErr({ sedeAtencion: mensajeError(er) });
@@ -394,7 +407,8 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
             <Fila k="Registrada">{`${fechaLarga(V.soloFecha(hecho.fechaVenta))}, por ${hecho.autor?.nombre || ""}`}</Fila>
           </dl>
           {t.decision === S.POR_DEFINIR && <Aviso tipo="aviso">El techo quedó por definir. Cuando el comprador decida, regístralo con «Elegir techo» (aquí o en la ficha de la moto): el total y el saldo se recalculan en esta misma venta.</Aviso>}
-          {t.decision === S.CON_TECHO && !(instalado && instalado.codtte === String(t.codtte)) && <Aviso tipo="info"><span data-techo-por-programar>El comprador eligió {techoNombreHecho || "un techo"}. La venta no configura ni instala el techo: prográmalo desde «Configuración de techo» en la ficha de la moto.</span></Aviso>}
+          {t.decision === S.CON_TECHO && !(instalado && instalado.codtte === String(t.codtte)) && <Aviso tipo="info"><span data-techo-por-programar>El comprador eligió {techoNombreHecho || "un techo"}{instalado ? ` y la moto tiene «${instalado.nombre}» instalado` : ""}. La venta no configura ni instala el techo: prográmalo desde «Configuración de techo» en la ficha de la moto.</span></Aviso>}
+          {t.decision === S.SIN_TECHO && instalado && <Aviso tipo="info"><span data-techo-por-programar>La moto tiene «{instalado.nombre}» instalado y el comprador la quiere sin techo: queda pendiente retirarlo antes de entregar (desde la ficha y Preparación).</span></Aviso>}
         </div>
         {eligiendoTecho && <ElegirTechoModal unidad={unidad} comprador={hecho.comprador} que="venta" venta={{ precioBaseAcordado: hecho.precioBaseAcordado ?? precio, totalRecibido: hecho.totalRecibido, descuento: hecho.descuento }} guardar={(d, tipo, adicional) => V.guardarTechoVentaApi(hecho.codven, d, tipo, adicional)} onClose={() => setEligiendoTecho(false)}
           onGuardado={() => { setEligiendoTecho(false); onHecho?.(); onClose(); }} />}
@@ -418,8 +432,9 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
           <dl className="divide-y divide-slate-100 text-[13.5px] dark:divide-white/10">
             <Fila k="Comprador">{S.textoComprador(comprador)}</Fila>
             <Fila k="Modalidad">{v.modalidad}</Fila>
-            <Fila k="Techo">{conversion ? `${S.textoDecision(sep?.decisionTecho)} (de la separación)` : S.textoDecision({ decision, codtte: tipoTecho?.codtte, nombre: tipoTecho?.nombre })}</Fila>
-            {difCfg && <Fila k="Configuración de techo" data="diferencia-revision">{difCfg}</Fila>}
+            <Fila k="Techo acordado">{!eligeTecho ? `${S.textoDecision(sep?.decisionTecho)} (de la separación)` : `${S.textoDecision({ decision, codtte: tipoTecho?.codtte, nombre: tipoTecho?.nombre })}${techoDeSeparacionCambio ? `. En la separación era: ${S.textoDecision(sep?.decisionTecho)}` : ""}`}</Fila>
+            {instalado && <Fila k="Techo de la moto">{`«${instalado.nombre}» instalado (la venta no lo cambia)`}</Fila>}
+            {difCfg && <Fila k="Adecuación pendiente" data="diferencia-revision">{difCfg}</Fila>}
             {decisionFinal === S.CON_TECHO && <Fila k="Adicional del techo" data="adicional-revision">{S.soles(nAdicional)}{typeof referencial === "number" && V.redondear(nAdicional) !== referencial ? `, acordado con el comprador (referencial ${S.soles(referencial)})` : ", referencial del catálogo"}</Fila>}
             {desc.tiene && <Fila k="Descuento" data="descuento-revision">{`${S.soles(nDesc)}. Motivo: ${S.limpio(desc.motivo)}`}<span className="mt-0.5 block text-[12px] font-normal text-slate-500">{`Autorizado por llamada por ${nombreDe(desc.autorizador)}. Queda registrado que tú confirmaste la llamada; no es una aprobación digital de esa persona.`}</span></Fila>}
             <Fila k="Sede de atención">{nombreSede(v.sedeAtencion)}</Fila>
@@ -508,11 +523,17 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
                     {sedes.map((x) => <option key={x.codsed} value={x.codsed}>{x.nombre}</option>)}
                   </select>
                 </Campo>
-                <Campo etiqueta="Responsable" error={ver("responsable")}>
-                  <select id="ven-responsable" className="field-input" value={v.responsable} onChange={(e) => cambiarV("responsable", e.target.value)}>
-                    <option value="">Elige al responsable</option>
-                    {form.responsables.map((r) => <option key={r.codusu} value={r.codusu}>{r.nombre} ({r.rol}){r.codusu === yo.codusu ? ", tú" : ""}</option>)}
-                  </select>
+                <Campo etiqueta="Responsable" error={ver("responsable")} ayuda={S.esVendedor(yo) ? "Como vendedor, la venta queda a tu nombre. Solo gerencia o administración la registran para otra persona." : undefined}>
+                  {(() => {
+                    const opciones = S.responsablesPermitidos(form, sep?.responsable?.codusu);
+                    const fijo = S.esVendedor(yo) && opciones.length <= 1;
+                    return (
+                      <select id="ven-responsable" className="field-input" value={v.responsable} disabled={fijo} data-responsable-fijo={fijo ? "1" : undefined} onChange={(e) => cambiarV("responsable", e.target.value)}>
+                        {!fijo && <option value="">Elige al responsable</option>}
+                        {opciones.map((r) => <option key={r.codusu} value={r.codusu}>{r.nombre} ({r.rol}){r.codusu === yo.codusu ? ", tú" : ""}</option>)}
+                      </select>
+                    );
+                  })()}
                 </Campo>
               </div>
               {precio === null && <Aviso tipo="aviso">Esta moto no tiene precio de lista registrado. Pide a gerencia que lo registre en Modelos antes de venderla.</Aviso>}
@@ -521,34 +542,47 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
             {/* Techo */}
             <section aria-labelledby="ven-techo" className="space-y-3">
               <h3 id="ven-techo" className="text-[15px] font-bold text-marino dark:text-white">Techo</h3>
-              {conversion ? (
-                <p className="text-[13.5px] text-slate-600 dark:text-slate-300" data-techo-de-separacion={sep?.decisionTecho?.decision || ""}>
-                  Se mantiene la decisión de la separación: <span className="font-semibold text-marino dark:text-white">{S.textoDecision(sep?.decisionTecho)}</span>.{sep?.decisionTecho?.decision === S.POR_DEFINIR ? " Cuando el comprador decida, regístralo desde la ficha de la moto: el total se recalcula en esta venta." : sep?.decisionTecho?.decision === S.SIN_TECHO ? " No suma al precio." : ""}
-                </p>
-              ) : (
+              {instalado && <Aviso tipo="info"><span data-techo-instalado={instalado.nombre}>{S.textoInstaladoVenta(instalado)}</span></Aviso>}
+              {conversion && (
+                <div className="space-y-2" data-techo-de-separacion={sep?.decisionTecho?.decision || ""}>
+                  <p className="text-[13.5px] text-slate-600 dark:text-slate-300">
+                    En la separación quedó: <span className="font-semibold text-marino dark:text-white">{S.textoDecision(sep?.decisionTecho)}</span>.{!cambiaTecho ? (sep?.decisionTecho?.decision === S.POR_DEFINIR ? " La venta lo mantiene; cuando el comprador decida, regístralo desde la ficha y el total se recalcula." : " La venta lo mantiene.") : " Esa elección queda como antecedente."}
+                  </p>
+                  <label className="flex items-start gap-2.5 text-[13.5px]">
+                    <input id="ven-cambia-techo" type="checkbox" className="mt-0.5 h-4 w-4 accent-marino-700" checked={cambiaTecho} data-cambiar-techo-separacion
+                      onChange={(e) => {
+                        const si = e.target.checked; setCambiaTecho(si); setErr((p) => ({ ...p, techo: undefined, adicional: undefined }));
+                        // Al volver a la elección de la separación se restaura su adicional referencial
+                        const t = sep?.decisionTecho?.decision === S.CON_TECHO ? tiposCon.find((x) => x.codtte === String(sep.decisionTecho.codtte)) : null;
+                        if (!si) { setDecision(sep?.decisionTecho?.decision || S.POR_DEFINIR); setCodtteCon(t?.codtte || ""); setV((x) => ({ ...x, adicional: S.adicionalDe(t) !== null ? montoTexto(S.adicionalDe(t)) : "" })); }
+                      }} />
+                    <span>El comprador quiere cambiar la elección de techo antes de confirmar la venta. <span className="text-slate-500">El adelanto se conserva una sola vez.</span></span>
+                  </label>
+                </div>
+              )}
+              {eligeTecho && (
                 <>
-                  {instalado && <Aviso tipo="info"><span data-techo-instalado={instalado.nombre}>{S.textoInstalado(instalado)}</span></Aviso>}
                   <fieldset>
                     <legend className="field-label">¿Qué decidió el comprador?</legend>
                     <div className="grid gap-2 sm:grid-cols-3" data-techo-opciones>
-                      <Opcion nombre="ven-techo" valor={S.POR_DEFINIR} actual={decision} titulo="Por definir" texto="Aún no decide. Se registra después, desde la ficha." onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined })); }} />
-                      {tipoSin && <Opcion nombre="ven-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `No disponible: esta moto ya tiene un techo instalado.` : "Eligió la moto sin techo. No suma al precio."} deshabilitada={Boolean(instalado)} onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined, adicional: undefined })); }} />}
-                      {tiposConOfrecidos.length > 0 && <Opcion nombre="ven-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene instalado («${instalado.nombre}»).` : "Eligió un techo: su adicional se suma al total."} onElegir={(x) => { setDecision(x); if (instalado) elegirTipo(instalado.codtte); setErr((p) => ({ ...p, techo: undefined })); }} />}
+                      <Opcion nombre="ven-techo" valor={S.POR_DEFINIR} actual={decision} titulo="Por definir" texto={instalado ? `Aún no decide si conserva «${instalado.nombre}» o lo cambia.` : "Aún no decide. Se registra después, desde la ficha."} onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined })); }} />
+                      {tipoSin && <Opcion nombre="ven-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `La quiere sin techo: retirar «${instalado.nombre}» queda pendiente. No suma al precio.` : "Eligió la moto sin techo. No suma al precio."} onElegir={(x) => { setDecision(x); setErr((p) => ({ ...p, techo: undefined, adicional: undefined })); }} />}
+                      {tiposCon.length > 0 && <Opcion nombre="ven-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Conserva «${instalado.nombre}» o elige otro: se cobra solo el techo final.` : "Eligió un techo: su adicional se suma al total."} onElegir={(x) => { setDecision(x); if (instalado && !codtteCon) elegirTipo(instalado.codtte); setErr((p) => ({ ...p, techo: undefined })); }} />}
                     </div>
                   </fieldset>
                   {decision === S.CON_TECHO && (
                     <Campo etiqueta="Tipo de techo" error={ver("techo")}>
                       <select id="ven-tipo-techo" className="field-input" value={codtteCon} onChange={(e) => { elegirTipo(e.target.value); tocar("techo"); }}>
                         <option value="">Elige el tipo de techo</option>
-                        {tiposConOfrecidos.map((t) => <option key={t.codtte} value={t.codtte}>{S.etiquetaTipoTecho(t)}</option>)}
+                        {tiposCon.map((t) => <option key={t.codtte} value={t.codtte}>{S.etiquetaTipoTecho(t)}{instalado?.codtte === t.codtte ? " · instalado en esta moto" : ""}</option>)}
                       </select>
                     </Campo>
                   )}
                 </>
               )}
-              {(conversion || decision !== S.CON_TECHO) && ver("techo") && <p className="text-[12px] font-medium text-acento">{ver("techo")}</p>}
-              {difCfg && <Aviso tipo="aviso"><span data-techo-diferencia>{difCfg}</span></Aviso>}
-              {decisionFinal === S.CON_TECHO && (conversion || tipoTecho) && (
+              {(!eligeTecho || decision !== S.CON_TECHO) && ver("techo") && <p className="text-[12px] font-medium text-acento">{ver("techo")}</p>}
+              {difCfg && <Aviso tipo="aviso"><span data-techo-diferencia data-adecuacion-pendiente>{difCfg}</span></Aviso>}
+              {decisionFinal === S.CON_TECHO && (!eligeTecho || tipoTecho) && (
                 <Campo etiqueta={`Adicional del techo${nombreTechoFinal ? ` ${nombreTechoFinal}` : ""} (S/)`} error={ver("adicional")} ayuda={V.ayudaAdicional(referencial)}>
                   <input id="ven-adicional" className="field-input cifra" inputMode="decimal" autoComplete="off" value={v.adicional} onChange={(e) => cambiarV("adicional", S.filtrarMonto(e.target.value, V.MAX_ENTEROS_ADICIONAL, v.adicional))} data-referencial={referencial ?? ""} />
                 </Campo>
@@ -720,14 +754,20 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
 // Ficha de la moto: venta registrada
 // ---------------------------------------------------------------------------------------------
 // HU-021: «Cancelar venta» (onCancelar) para el gerente, la administradora o el vendedor responsable vigente
-export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, onCorregir, version = 0 }) {
+export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, onCorregir, onEntrega, version = 0 }) {
   const toast = useToast();
   const activo = unidad?.comercial === "Vendida";
   const consulta = useConsultaCentral(() => V.ventaDeUnidadApi(unidad.coduni), [unidad?.coduni, version], { activo, intervalo: 20000, clave: `venta:${unidad?.coduni}` });
   const [eligiendo, setEligiendo] = useState(false);
   const [comprobante, setComprobante] = useState(false);
   const vta = consulta.data;
+  // HU-032: entrega efectiva de esta venta (la preparación y la ubicación se revisan en el servidor)
+  const prepClave = `${unidad?.preparacion?.estado || ""}|${unidad?.ubicacion?.codubi || ""}|${unidad?.movimiento_activo?.estado || ""}|${vta?.techo?.decision || ""}`;
+  const entrega = useConsultaCentral(() => E.entregaDeVentaApi(vta.codven), [vta?.codven, version, prepClave], { activo: Boolean(activo && vta?.codven), intervalo: 20000, clave: `entrega:${vta?.codven}` });
+  const estadoEntrega = entrega.data?.estado || "";
+  useEffect(() => { onEntrega?.(entrega.data || null); }, [entrega.data]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!activo) return null;
+  const entregada = estadoEntrega === E.ENTREGADA;
   async function verEvidencia(ruta) {
     const ventana = window.open("", "_blank");
     try { const url = await V.urlEvidenciaVentaApi(ruta); if (ventana) ventana.location.href = url; else window.open(url, "_blank"); }
@@ -742,16 +782,19 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
   const acordado = Number(vta?.adicionalTechoAcordado);
   const referencial = Number(vta?.adicionalTechoReferencial);
   const prep = etapaConTechoComercial(unidad);
+  // Escenarios 13 y 22 (PO 15/11): techo físico de la moto y lo acordado en la venta, por separado
+  const fisico = S.techoConfiguradoDe(unidad);
+  const adecuacion = vta ? S.adecuacionPendiente(fisico, t.decision, t.codtte ? { codtte: t.codtte, nombre: vta.techoNombre } : null) : "";
   return (
     <Card data-venta={vta?.codven || ""}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-marino dark:text-white">Venta registrada</h2>
-          <p className="text-[13px] text-slate-500">Vendida, pendiente de entrega. La venta no confirma llegada, preparación ni entrega.</p>
+          <p className="text-[13px] text-slate-500" data-venta-subtitulo>{entregada ? `Entregada al comprador${entrega.data?.entrega?.fecha ? ` el ${fechaLarga(entrega.data.entrega.fecha)}` : ""}.` : "Vendida, pendiente de entrega. La venta no confirma llegada, preparación ni entrega."}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {vta && puedeEditar && !vta.comprobanteExterno && <button className="btn btn-secondary !py-2 text-[13px]" onClick={() => setComprobante(true)} data-registrar-comprobante>Registrar comprobante</button>}
-          {vta && <BotonCorregir venta={vta} onCorregir={onCorregir} />}
+          {vta && !entregada && <BotonCorregir venta={vta} onCorregir={onCorregir} />}
           {vta && <BotonCancelar tipo={VENTA} operacion={vta} onCancelar={onCancelar} />}
         </div>
       </div>
@@ -774,6 +817,7 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
               {t.decision !== S.POR_DEFINIR && <p className="mt-0.5 text-[12px] text-slate-500">La decisión ya no se cambia.</p>}
             </dd>
           </div>
+          {fisico && <Fila k="Techo de la moto" data="techo-fisico">{`«${fisico.nombre}» ${S.estadoTechoMoto(fisico)}. La venta no lo cambia.`}{adecuacion && <span className="mt-0.5 block text-[12px] font-normal text-amber-700 dark:text-amber-300" data-adecuacion-pendiente>{adecuacion}</span>}</Fila>}
           {Number(vta.descuento) > 0 && <Fila k="Importe antes del descuento" data="antes"><span className="cifra">{S.soles(vta.importeAntesDescuento)}</span></Fila>}
           {Number(vta.descuento) > 0 && <Fila k="Descuento autorizado" data="descuento"><span className="cifra" data-descuento-venta={vta.descuento}>− {S.soles(vta.descuento)}</span>{vta.motivoDescuento ? `. Motivo: ${vta.motivoDescuento}` : ""}<span className="mt-0.5 block text-[12px] font-normal text-slate-500" data-autorizacion-descuento>{V.textoAutorizacion(vta)}</span></Fila>}
           <Fila k="Total de la venta" data="total"><span className="cifra" data-total-venta={vta.importe}>{S.soles(vta.importe)}</span></Fila>
@@ -795,14 +839,16 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
           <Fila k={vta.modalidad === "Crédito" ? "Saldo a crédito" : "Saldo pendiente"} data="saldo"><span className="cifra" data-saldo-venta={vta.saldo}>{S.soles(vta.saldo)}</span></Fila>
           <Fila k="Sede de atención">{vta.sedeAtencion?.nombre}</Fila>
           <Fila k="Ubicación de la moto">{x.texto}</Fila>
-          <Fila k="Entrega pactada" data="entrega">{obs.entrega ? `Se entregará ${obs.entrega}${vta.sedeEntregaPrevista && !/\ben\b/.test(obs.entrega) ? ` en ${vta.sedeEntregaPrevista.nombre}` : ""}` : vta.sedeEntregaPrevista ? `En ${vta.sedeEntregaPrevista.nombre}` : "Por acordar"}<span className="block text-[12px] font-normal text-slate-500">Acuerdo pendiente: la moto no está armada ni entregada por registrar la venta.</span></Fila>
-          <Fila k="Preparación actual" data="preparacion"><span data-etapa-preparacion={prep.etapa}>{prep.etapa}</span>{prep.nota && <span className="block text-[12px] font-normal text-slate-500">{prep.nota}</span>}</Fila>
+          <Fila k={entregada ? "Entrega acordada" : "Entrega pactada"} data="entrega">{obs.entrega ? `Se entregará ${obs.entrega}${vta.sedeEntregaPrevista && !/\ben\b/.test(obs.entrega) ? ` en ${vta.sedeEntregaPrevista.nombre}` : ""}` : vta.sedeEntregaPrevista ? `En ${vta.sedeEntregaPrevista.nombre}` : "Por acordar"}{!entregada && <span className="block text-[12px] font-normal text-slate-500">Acuerdo pendiente: la moto no está armada ni entregada por registrar la venta.</span>}</Fila>
+          <Fila k="Preparación actual" data="preparacion"><span data-etapa-preparacion={prep.etapa}>{entregada ? `Ya entregada al comprador (preparación: ${prep.etapa.toLowerCase()})` : prep.etapa}</span>{prep.nota && !entregada && <span className="block text-[12px] font-normal text-slate-500">{prep.nota}</span>}</Fila>
           <Fila k="Comprobante">{vta.comprobanteExterno ? `${vta.comprobanteExterno.referencia}, emitido el ${fechaLarga(vta.comprobanteExterno.fecha)}` : <span className="text-amber-700 dark:text-amber-300">Sin comprobante registrado</span>}<span className="block text-[12px] font-normal text-slate-500">La boleta o factura la emite EPSA en SUNAT; aquí solo se guarda su serie, número y fecha.</span></Fila>
           <Fila k="Responsable">{vta.responsable?.nombre || "Sin responsable asignado"}</Fila>
           <Fila k="Fecha de la venta">{`${fechaLarga(V.soloFecha(vta.fechaVenta))}, registrada por ${vta.autor?.nombre || ""}`}</Fila>
           {obs.resto && <Fila k="Observación">{obs.resto}</Fila>}
         </dl>
       )}
+      {vta && <EntregaVenta venta={vta} unidad={unidad} consulta={entrega} puedeEditar={puedeEditar} onCambio={listo} />}
+      {vta && entregada && onCorregir && <p className="mt-3 text-[12px] text-slate-500" data-nota-corregir-entregada>Corrección: con la entrega registrada ya no se corrige el comprador ni la moto. Si hay que revertirla, se cancela la venta con la decisión del gerente.</p>}
       {vta && onCancelar && <NotaPermisoCancelar operacion={vta} />}
       {eligiendo && vta && <ElegirTechoModal unidad={unidad} comprador={vta.comprador} que="venta" venta={vta} guardar={(d, tipo, adicional) => V.guardarTechoVentaApi(vta.codven, d, tipo, adicional)} onClose={() => setEligiendo(false)} onGuardado={() => { setEligiendo(false); listo(); }} />}
       {comprobante && vta && <ComprobanteModal venta={vta} onClose={() => setComprobante(false)} onGuardado={() => { setComprobante(false); listo(); }} />}

@@ -17,6 +17,7 @@ import { Link } from "./LinkPanel";
 import { fechaCompleta } from "./Central";
 import { fechaLarga } from "../../lib/validar";
 import { BuscarInteresado, Opcion } from "./SepararCentral";
+import { trasladoDe } from "../../servicios/inventarioCentral";
 
 const COMPRADOR_VACIO = { nombres: "", apellidoPaterno: "", apellidoMaterno: "", telefono: "" };
 const FIRMA_COMPRADOR = (c) => JSON.stringify([S.limpio(c.nombres), S.limpio(c.apellidoPaterno), S.limpio(c.apellidoMaterno), c.telefono]);
@@ -228,7 +229,7 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
                 <Dato k="Venta">N° {o.codven}</Dato>
                 <Dato k="Comprador" data="comprador"><Cambio cambia={cambioCli} antes={ant?.comprador?.nombre || `Cliente N° ${o.codcliAnterior}`} despues={o.venta?.comprador?.nombre || S.nombreComprador(registrado?.comprador) || `Cliente N° ${o.codcliNuevo}`} /></Dato>
                 <Dato k="Moto" data="moto"><Cambio cambia={cambioMoto} antes={C.textoMoto(motoPreview(ant?.unidad))} despues={C.textoMoto(nueva)} /></Dato>
-                {cambioMoto && o.estadoUnidadOrigenResultante && hecho.tipo !== "Intercambio" && <Dato k="La moto anterior queda" data="moto-anterior"><span data-estado-origen={o.estadoUnidadOrigenResultante}>{C.textoEstado(o.estadoUnidadOrigenResultante)}</span></Dato>}
+                {cambioMoto && o.estadoUnidadOrigenResultante && hecho.tipo !== "Intercambio" && <Dato k="La moto anterior queda" data="moto-anterior"><span data-estado-origen={o.estadoUnidadOrigenResultante}>{C.textoEstado(o.estadoUnidadOrigenResultante, String(unidad?.coduni) === String(o.coduniAnterior) ? trasladoDe(unidad) : "")}</span></Dato>}
                 {cambioMoto && <div className="py-2"><Link className="text-[13px] font-semibold text-marino-700 hover:underline dark:text-white" to={`/admin/inventario/${o.coduniNueva}`} onClick={onClose} data-ficha-nueva={o.coduniNueva}>Ver la ficha de la moto {nueva?.motor ? `con motor ${nueva.motor}` : `N° ${o.coduniNueva}`}</Link></div>}
               </dl>
             );
@@ -367,7 +368,8 @@ function Revision({ p, pB, que, nuevo, elegida, motivo, compatA, compatB }) {
       {(intercambio ? [p, pB] : [p]).filter((x) => x?.finanzas?.comprobanteExterno && (intercambio || cambiaCli || cambiaMoto)).map((x) => (
         <Aviso key={`comp-${x.codven}`} tipo="aviso"><span data-aviso-comprobante={x.codven}>La venta N° {x.codven} ya tiene la boleta o factura {x.finanzas.comprobanteExterno.referencia || ""} emitida{x.finanzas.comprobanteExterno.fecha ? ` el ${fechaLarga(String(x.finanzas.comprobanteExterno.fecha).slice(0, 10))}` : ""}. Esta corrección no la cambia: coordina con administración su corrección en SUNAT, porque fue emitida con el comprador y la moto anteriores.</span></Aviso>
       ))}
-      <p className="text-[12.5px] text-slate-500" data-nota-entrega>La plataforma todavía no registra entregas: corrige solo si la moto no se entregó al comprador. Si ya se entregó, coordínalo antes con gerencia.</p>
+      {(intercambio ? [p, pB] : [p]).some((x) => x?.entrega && typeof x.entrega === "object") ? <Aviso tipo="error"><span data-aviso-entregada>Una de estas ventas ya tiene la entrega registrada: no se puede corregir. Si hay que revertirla, se cancela la venta con la decisión del gerente.</span></Aviso>
+        : <p className="text-[12.5px] text-slate-500" data-nota-entrega>Si la moto ya se entregó al comprador (entrega registrada), la corrección no se permite; el servidor lo vuelve a revisar al confirmar.</p>}
     </div>
   );
 }
