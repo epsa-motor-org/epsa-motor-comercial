@@ -118,8 +118,8 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
   await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
   await db.exec(leer('supabase/migrations/202611140005_movimiento_situacion_fisica_comercial.sql'));
-  await db.exec(leer('supabase/migrations/202611150001_hu005_hu006_reglas_po.sql'));
-  await db.exec(leer('supabase/migrations/202611150001_hu005_hu006_reglas_po.sql'));
+  await db.exec(leer('supabase/migrations/202611150002_hu005_hu006_reglas_po.sql'));
+  await db.exec(leer('supabase/migrations/202611150002_hu005_hu006_reglas_po.sql'));
   await db.exec(`INSERT INTO auth.users(id) VALUES ${UUIDS.map(id => `('${id}')`).join(',')};
     INSERT INTO public.rol(nomrol,estrol) VALUES ('Gerente',true),('Administradora',true),('Vendedor',true);
     INSERT INTO public.usuario(uuidusu,codrol,nomusu,apepatusu,corusu,estusu)

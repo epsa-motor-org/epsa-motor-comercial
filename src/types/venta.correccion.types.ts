@@ -1,3 +1,5 @@
+import type { EntregaRegistrada } from './entrega.types';
+
 export interface CorreccionRelacionRequest {
   motivo: string;
   versionEsperada: number;
@@ -78,7 +80,7 @@ export interface VentaPreviewCorreccion {
     adelantoConfirmado: boolean;
     montoAdelanto: number;
   } | null;
-  entrega: 'HU-032 pendiente de fuente autoritativa';
+  entrega: EntregaRegistrada | null;
 }
 
 export interface PreviewCorreccionRelacionResultado {
