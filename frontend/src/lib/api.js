@@ -149,10 +149,12 @@ export const equipoReiniciarClaveApi = (codusu, clave) => rpc("equipo_reiniciar_
 export const permisosListarApi = () => rpc("permisos_listar");
 export const permisosGuardarApi = (rol, seccion, activo) => rpc("permisos_guardar", { p_rol: rol, p_seccion: seccion, p_activo: activo });
 
-// Cotización o consulta de la web: queda como interesado en Leads (docs/supabase-sprint2-conexiones.sql)
+// HU-011: contrato público vigente en docs/HU-011.md y su migración versionada.
 export const registrarInteresadoWebApi = (d) => rpc("web_registrar_interesado", {
   p_nombre: d.nombre, p_telefono: d.telefono, p_codmod: d.codmod ? Number(d.codmod) : null, p_color: d.color || null,
   p_codsed: d.codsed ? Number(d.codsed) : null, p_detalle: d.detalle || null, p_tipo: d.tipo,
+  p_idempotencia: d.idempotencia, p_acepta: d.acepta === true,
+  p_version_aviso: d.versionAviso, p_contexto: d.contexto || null,
 }, { publica: true });
 
 // HU-036: página de torito.pe leída desde Supabase (docs/supabase-torito-en-vivo.sql)

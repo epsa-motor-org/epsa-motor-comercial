@@ -3,12 +3,12 @@
 // Sin API, el panel funciona como vista previa y guarda en este navegador.
 import { MODO_REAL } from "./config";
 
-// HU-005 y HU-011 ya no son del Sprint 2 (HU-011 pasa al Sprint 3): siguen solo en la vista previa.
+// HU-011 usa el registro central del Sprint 3; requiere aplicar su migración junto al frontend.
 export const CONECTADO = {
   "HU-001": MODO_REAL, // Consultar disponibilidad compartida
   "HU-003": MODO_REAL, // Registrar movimientos de ubicación
   "HU-005": false, // Separar una moto con adelanto confirmado (fuera del Sprint 2)
-  "HU-011": false, // Enviar una consulta desde la web (Sprint 3)
+  "HU-011": MODO_REAL, // Enviar una consulta desde la web (Sprint 3)
   "HU-015": MODO_REAL, // Asignar o transferir un interesado
   "HU-023": MODO_REAL, // Consultar compras pendientes de identificación o recepción
   "HU-030": MODO_REAL, // Registrar compras y unidades desde facturas recibidas por correo
