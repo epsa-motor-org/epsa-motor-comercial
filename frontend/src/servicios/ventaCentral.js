@@ -255,6 +255,18 @@ export function fechaLima(iso) {
 }
 
 // Mensaje claro para los errores de la venta
+// PO 15/11: la pantalla ya permite otro techo en una moto con techo instalado y cambiar al vender la elección de la
+// separación. Si el servidor todavía no lo acepta (la API responde 409 «La elección de techo no coincide o es
+// incompatible con la unidad»), se explica en lenguaje claro qué hacer, en vez del mensaje técnico.
+export const esRechazoTechoServidor = (e) => /no coincide|incompatible|no es compatible|techo instalado/i.test(String(e?.message || ""));
+export function textoErrorTecho(e, { cambioSeparacion = false, instalado = null, despues = false } = {}) {
+  const m = String(e?.message || "");
+  if (!esRechazoTechoServidor(e)) return m || "No se pudo guardar el techo.";
+  if (cambioSeparacion || /separaci[oó]n/i.test(m)) return "El servidor todavía no acepta cambiar al vender el techo que se eligió en la separación (falta habilitarlo). Mientras tanto, desmarca «cambiar la elección» y registra la venta con el techo de la separación: no se guardó nada.";
+  if (instalado && despues) return `El servidor todavía no acepta otro techo en una moto que ya tiene «${instalado.nombre}» instalado (falta habilitarlo). Mientras tanto, guarda «${instalado.nombre}» si el comprador lo conserva o cierra esta ventana y el techo sigue por definir: no se guardó nada.`;
+  if (instalado) return `El servidor todavía no acepta otro techo en una moto que ya tiene «${instalado.nombre}» instalado (falta habilitarlo). Mientras tanto, registra la venta conservando ese techo o con el techo «Por definir»: no se guardó nada.`;
+  return `${m}. No se guardó nada.`;
+}
 export function campoDelError(e) {
   const m = String(e?.message || "");
   if (/descuento|autorizador/i.test(m)) return "descuento";

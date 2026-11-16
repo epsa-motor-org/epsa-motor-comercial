@@ -1,9 +1,9 @@
 // HU-021 · Cancelar una separación o una venta sin borrar su información (base central)
 // Desde la ficha de la moto, quien puede (gerente, administradora o el vendedor responsable vigente) registra el
 // motivo y qué pasó con el dinero recibido. La operación queda «Cancelada» con su nombre y la fecha; se conservan el
-// adelanto, los pagos, las evidencias y el comprobante. La moto queda libre solo si no tiene otro compromiso vigente ni un
-// traslado en curso (con traslado queda «No disponible»);
-// su ubicación, techo y preparación no cambian. No se registra ninguna devolución ni se anula ningún comprobante.
+// adelanto, los pagos, las evidencias y el comprobante. La moto queda libre si no tiene otro compromiso vigente, aunque
+// esté en traslado (regla del PO del 14/11: el traslado sigue y se muestra «Libre para vender · En tránsito a …»);
+// su ubicación, movimiento, techo y preparación no cambian. No se registra ninguna devolución ni se anula ningún comprobante.
 // Si la red falla, se revisa en el servidor si la cancelación quedó guardada antes de decir nada: no se anuncia un
 // éxito que no ocurrió ni se cancela dos veces.
 import { useEffect, useRef, useState } from "react";
@@ -13,6 +13,7 @@ import { fechaLarga } from "../../lib/validar";
 import { sinRespuesta, useConsultaCentral, useIntento } from "../../servicios/central";
 import * as C from "../../servicios/cancelacionCentral";
 import * as S from "../../servicios/separacionCentral";
+import { trasladoDe } from "../../servicios/inventarioCentral";
 import { Aviso, Campo, Card, Modal, useToast } from "../ui";
 import { IconCheck } from "../Icons";
 import { fechaCompleta } from "./Central";
@@ -140,7 +141,7 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
           </div>
           <dl className="divide-y divide-slate-100 text-[13.5px] dark:divide-white/10">
             <Dato k="Moto">{moto}</Dato>
-            <Dato k="La moto queda" data="estado-moto"><span data-estado-moto={hecho.estadoComercialUnidad}>{C.textoEstadoMoto(hecho.estadoComercialUnidad)}</span></Dato>
+            <Dato k="La moto queda" data="estado-moto"><span data-estado-moto={hecho.estadoComercialUnidad}>{C.textoEstadoMoto(hecho.estadoComercialUnidad, trasladoDe(unidad))}</span></Dato>
             <Dato k="Motivo">{hecho.motivo}</Dato>
             {hecho.observacionDinero && <Dato k="Dinero recibido">{hecho.observacionDinero}</Dato>}
             {esVenta && f.totalRecibido !== undefined && <Dato k="Se conserva" data="conserva"><span className="cifra">{S.soles(f.totalRecibido)}</span> recibido{f.comprobanteExternoConservado ? " y el comprobante" : ""}</Dato>}
@@ -154,7 +155,7 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
 
   return (
     <Modal abierto onClose={onClose} titulo={titulo} ancho="max-w-xl" sinAvisoCambios={Boolean(enviando)}
-      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre si no tiene otro compromiso ni un traslado en curso.`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); return !e.motivo && !e.observacion && !bloqueada; } }}
+      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre para vender si no tiene otro compromiso. Si está en traslado, el traslado sigue igual.`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); return !e.motivo && !e.observacion && !bloqueada; } }}
       pie={<>
         <button type="button" className="btn btn-secondary !py-2" onClick={onClose} data-volver-cancelacion>Volver</button>
         <button form="f-cancelar" className="btn !py-2 bg-acento text-white hover:bg-acento-600 disabled:opacity-60" disabled={Boolean(enviando) || bloqueada} data-confirmar-cancelacion>{enviando || titulo}</button>

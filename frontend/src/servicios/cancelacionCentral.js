@@ -98,8 +98,11 @@ export function errorCancelacion(er, tipo) {
 export const esMiCancelacion = (c, codusu, motivo) =>
   Boolean(c && String(c.actor?.codusu ?? "") === String(codusu ?? "") && normalizar(c.motivo) === normalizar(motivo));
 
-// Texto de cómo quedó la moto
-// Con un traslado HU-003 pendiente o en tránsito, la moto queda «No disponible» (202611140003 de Michelle): no se anuncia libre
-export const ESTADO_MOTO = { Disponible: "Libre para vender", Separada: "Sigue separada (tiene otra separación activa)", Vendida: "Sigue vendida (tiene otra venta vigente)", "No disponible": "No disponible: tiene un traslado en curso, todavía no queda libre para vender" };
-export const textoEstadoMoto = (e) => ESTADO_MOTO[e] || e || "Sin dato";
+// Texto de cómo quedó la moto. Regla del PO del 14/11 (EMT-26/10156, 202611140005 de Michelle): un traslado en curso
+// no la bloquea; si no tiene otro compromiso queda libre y el traslado sigue («Libre para vender · En tránsito a …»).
+export const ESTADO_MOTO = { Disponible: "Libre para vender", Separada: "Sigue separada (tiene otra separación activa)", Vendida: "Sigue vendida (tiene otra venta vigente)", "No disponible": "No disponible para vender" };
+export const textoEstadoMoto = (e, traslado = "") => {
+  const texto = ESTADO_MOTO[e] || e || "Sin dato";
+  return e === "Disponible" && traslado ? `${texto} · ${traslado}` : texto;
+};
 export const textoTipo = (t) => (t === "Venta" ? "Venta" : "Separación");

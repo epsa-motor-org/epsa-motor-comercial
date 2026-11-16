@@ -15,7 +15,7 @@ import { MAX_DETALLE_TECHO, TIPOS_TECHO } from "../../data/mockData";
 import * as api from "../../lib/api";
 import { mensajeError } from "../../lib/errores";
 import { unidadCentralApi, useConsultaCentral } from "../../servicios/central";
-import { preparacionDe, techoDe, ubicacionDe } from "../../servicios/inventarioCentral";
+import { preparacionDe, techoDe, trasladoDe, ubicacionDe } from "../../servicios/inventarioCentral";
 import { Aviso, Campo, Card, PageHeader, useConfirm, useToast } from "../../components/ui";
 import { AvisoConexion, BarraActualizacion, PillComercial, PillPreparacion, capital } from "../../components/dashboard/Central";
 import MovimientosUnidad from "../../components/dashboard/MovimientosUnidad";
@@ -91,7 +91,9 @@ function FichaCentral({ id }) {
   const p = u.preparacion;
   const t = techoDe(p);
   const prep = preparacionDe(p);
-  const textoSituacion = { Libre: "Libre para vender, con o sin techo.", "No disponible": "Todavía no está a la venta.", Separada: "Tiene una separación activa.", Vendida: "Vendida, pendiente de entrega." }[u.comercial] || "";
+  // Un traslado no bloquea la venta (PO, 14/11): libre en camino se puede separar o vender; el traslado sigue
+  const traslado = trasladoDe(u);
+  const textoSituacion = { Libre: traslado ? `${traslado}. Se puede separar o vender; el traslado sigue y no la deja lista para entregar.` : "Libre para vender, con o sin techo.", "No disponible": "Todavía no está a la venta.", Separada: "Tiene una separación activa.", Vendida: "Vendida, pendiente de entrega." }[u.comercial] || "";
 
   // Inventario central (API de Michelle): ubicación, techo, preparación y situación tal como están en la base,
   // con la preparación por etapas (HU-033), los movimientos (HU-003) y la configuración de techo (HU-004).

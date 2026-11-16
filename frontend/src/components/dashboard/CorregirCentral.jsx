@@ -17,6 +17,7 @@ import { Link } from "./LinkPanel";
 import { fechaCompleta } from "./Central";
 import { fechaLarga } from "../../lib/validar";
 import { BuscarInteresado, Opcion } from "./SepararCentral";
+import { trasladoDe } from "../../servicios/inventarioCentral";
 
 const COMPRADOR_VACIO = { nombres: "", apellidoPaterno: "", apellidoMaterno: "", telefono: "" };
 const FIRMA_COMPRADOR = (c) => JSON.stringify([S.limpio(c.nombres), S.limpio(c.apellidoPaterno), S.limpio(c.apellidoMaterno), c.telefono]);
@@ -228,7 +229,7 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
                 <Dato k="Venta">N° {o.codven}</Dato>
                 <Dato k="Comprador" data="comprador"><Cambio cambia={cambioCli} antes={ant?.comprador?.nombre || `Cliente N° ${o.codcliAnterior}`} despues={o.venta?.comprador?.nombre || S.nombreComprador(registrado?.comprador) || `Cliente N° ${o.codcliNuevo}`} /></Dato>
                 <Dato k="Moto" data="moto"><Cambio cambia={cambioMoto} antes={C.textoMoto(motoPreview(ant?.unidad))} despues={C.textoMoto(nueva)} /></Dato>
-                {cambioMoto && o.estadoUnidadOrigenResultante && hecho.tipo !== "Intercambio" && <Dato k="La moto anterior queda" data="moto-anterior"><span data-estado-origen={o.estadoUnidadOrigenResultante}>{C.textoEstado(o.estadoUnidadOrigenResultante)}</span></Dato>}
+                {cambioMoto && o.estadoUnidadOrigenResultante && hecho.tipo !== "Intercambio" && <Dato k="La moto anterior queda" data="moto-anterior"><span data-estado-origen={o.estadoUnidadOrigenResultante}>{C.textoEstado(o.estadoUnidadOrigenResultante, String(unidad?.coduni) === String(o.coduniAnterior) ? trasladoDe(unidad) : "")}</span></Dato>}
                 {cambioMoto && <div className="py-2"><Link className="text-[13px] font-semibold text-marino-700 hover:underline dark:text-white" to={`/admin/inventario/${o.coduniNueva}`} onClick={onClose} data-ficha-nueva={o.coduniNueva}>Ver la ficha de la moto {nueva?.motor ? `con motor ${nueva.motor}` : `N° ${o.coduniNueva}`}</Link></div>}
               </dl>
             );

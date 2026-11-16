@@ -209,7 +209,7 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
     if (decision === S.CON_TECHO && !tipoTecho) e.techo = "Elige el tipo de techo que eligió el comprador.";
     if (decision === S.SIN_TECHO && !tipoTecho) e.techo = "No hay un tipo «Sin techo» activo: elige otra opción.";
     if (!e.techo && !S.compatibleConInstalado(instalado, decision, tipoTecho)) e.techo = S.errorTechoMoto(instalado);
-    if (!form?.responsables.some((r) => r.codusu === responsable)) e.responsable = "Elige quién será responsable de esta separación.";
+    if (!S.responsablesPermitidos(form).some((r) => r.codusu === responsable)) e.responsable = S.esVendedor(form?.usuarioActual) ? "Como vendedor, la separación queda a tu nombre." : "Elige quién será responsable de esta separación.";
     return e;
   }
   const vivos = form ? calcularErrores() : {};
@@ -497,10 +497,10 @@ export default function SepararMotoCentral({ unidad, onClose, onHecho, onConflic
             {/* Responsable */}
             <section aria-labelledby="sep-responsable-titulo" className="space-y-3">
               <h3 id="sep-responsable-titulo" className="text-[15px] font-bold text-marino dark:text-white">Responsable</h3>
-              <Campo etiqueta="Quién atiende esta separación" error={ver("responsable")}>
-                <select id="sep-responsable" className="field-input" value={responsable} onChange={(e) => { setResponsable(e.target.value); tocar("responsable"); setErr((p) => ({ ...p, responsable: undefined })); }}>
-                  <option value="">Elige al responsable</option>
-                  {form.responsables.map((r) => <option key={r.codusu} value={r.codusu}>{r.nombre} ({r.rol}){r.codusu === form.usuarioActual.codusu ? ", tú" : ""}</option>)}
+              <Campo etiqueta="Quién atiende esta separación" error={ver("responsable")} ayuda={S.esVendedor(form.usuarioActual) ? "Como vendedor, la separación queda a tu nombre. Solo gerencia o administración la registran para otra persona." : undefined}>
+                <select id="sep-responsable" className="field-input" value={responsable} disabled={S.esVendedor(form.usuarioActual)} data-responsable-fijo={S.esVendedor(form.usuarioActual) ? "1" : undefined} onChange={(e) => { setResponsable(e.target.value); tocar("responsable"); setErr((p) => ({ ...p, responsable: undefined })); }}>
+                  {!S.esVendedor(form.usuarioActual) && <option value="">Elige al responsable</option>}
+                  {S.responsablesPermitidos(form).map((r) => <option key={r.codusu} value={r.codusu}>{r.nombre} ({r.rol}){r.codusu === form.usuarioActual.codusu ? ", tú" : ""}</option>)}
                 </select>
               </Campo>
             </section>
@@ -636,10 +636,14 @@ export function ElegirTechoModal({ unidad, comprador, guardar, onClose, onGuarda
   const tipoSin = S.tipoSinTecho(tipos || []);
   const tiposCon = S.tiposConTecho(tipos || []);
   const instaladoBase = S.techoDeLaMoto(unidad, tipos || []);
-  const instalado = instaladoBase && tiposCon.some((t) => t.codtte === instaladoBase.codtte) ? instaladoBase : null;
+  const instaladoMoto = instaladoBase && tiposCon.some((t) => t.codtte === instaladoBase.codtte) ? instaladoBase : null;
+  // PO 15/11 (HU-006, escenario 18): en una venta el techo instalado no restringe; queda la adecuación pendiente.
+  // En una separación se mantiene la regla aceptada de HU-005.
+  const instalado = esVenta ? null : instaladoMoto;
   const tiposOfrecidos = instalado ? tiposCon.filter((t) => t.codtte === instalado.codtte) : tiposCon;
   const elegido = S.tipoDeDecision(tipos || [], decision, codtteCon);
-  const diferencia = S.diferenciaConfigurado(S.techoConfiguradoDe(unidad, tipos || []), decision, elegido);
+  const diferencia = esVenta ? S.adecuacionPendiente(S.techoConfiguradoDe(unidad, tipos || []), decision, elegido)
+    : S.diferenciaConfigurado(S.techoConfiguradoDe(unidad, tipos || []), decision, elegido);
   const referencial = S.adicionalDe(elegido);
   // Cuentas de la venta con la decisión elegida
   const base = Number(venta?.precioBaseAcordado);
@@ -662,7 +666,7 @@ export function ElegirTechoModal({ unidad, comprador, guardar, onClose, onGuarda
     if (falta || guardando) return;
     setGuardando(true); setError("");
     try { await guardar(decision, elegido, decision === S.CON_TECHO ? S.montoParaEnviar(adicional) : undefined); toast("Techo guardado"); onGuardado(); }
-    catch (e) { setError(S.faltaInstalar(e) ? S.FALTA_INSTALAR : sinRespuesta(e) ? "No se pudo confirmar si el techo se guardó porque falló la conexión. Vuelve a pulsar «Guardar techo»: no se duplica nada." : `No se pudo guardar el techo: ${mensajeError(e)}`); }
+    catch (e) { setError(S.faltaInstalar(e) ? S.FALTA_INSTALAR : sinRespuesta(e) ? "No se pudo confirmar si el techo se guardó porque falló la conexión. Vuelve a pulsar «Guardar techo»: no se duplica nada." : esVenta && V.esRechazoTechoServidor(e) ? V.textoErrorTecho(e, { instalado: instaladoMoto, despues: true }) : `No se pudo guardar el techo: ${mensajeError(e)}`); }
     finally { setGuardando(false); }
   }
   return (
@@ -677,18 +681,19 @@ export function ElegirTechoModal({ unidad, comprador, guardar, onClose, onGuarda
         {tipos && (
           <>
             {instalado && <Aviso tipo="info"><span data-techo-instalado={instalado.nombre}>{S.textoInstalado(instalado)}</span></Aviso>}
+            {esVenta && instaladoMoto && <Aviso tipo="info"><span data-techo-instalado={instaladoMoto.nombre}>{S.textoInstaladoVenta(instaladoMoto)}</span></Aviso>}
             <fieldset>
               <legend className="field-label">¿Qué decidió el comprador?</legend>
               <div className="grid gap-2 sm:grid-cols-2" data-techo-opciones>
-                {tipoSin && <Opcion nombre="ficha-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `No disponible: esta moto ya tiene un techo instalado.` : "Eligió la moto sin techo. No suma al precio."} deshabilitada={Boolean(instalado)} onElegir={(v) => { setDecision(v); setError(""); }} />}
-                {tiposOfrecidos.length > 0 && <Opcion nombre="ficha-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene instalado («${instalado.nombre}»).` : esVenta ? "Su adicional se suma al total de la venta." : "Su instalación se programa desde la ficha de la moto."} onElegir={(v) => { setDecision(v); if (instalado) elegirTipo(tipos, instalado.codtte); setError(""); }} />}
+                {tipoSin && <Opcion nombre="ficha-techo" valor={S.SIN_TECHO} actual={decision} titulo="Sin techo" texto={instalado ? `No disponible: esta moto ya tiene un techo instalado.` : esVenta && instaladoMoto ? `La quiere sin techo: retirar «${instaladoMoto.nombre}» queda pendiente. No suma al precio.` : "Eligió la moto sin techo. No suma al precio."} deshabilitada={Boolean(instalado)} onElegir={(v) => { setDecision(v); setError(""); }} />}
+                {tiposOfrecidos.length > 0 && <Opcion nombre="ficha-techo" valor={S.CON_TECHO} actual={decision} titulo="Con techo" texto={instalado ? `Con el techo que ya tiene instalado («${instalado.nombre}»).` : esVenta && instaladoMoto ? `Conserva «${instaladoMoto.nombre}» o elige otro: se cobra solo el techo final.` : esVenta ? "Su adicional se suma al total de la venta." : "Su instalación se programa desde la ficha de la moto."} onElegir={(v) => { setDecision(v); if (instalado) elegirTipo(tipos, instalado.codtte); setError(""); }} />}
               </div>
             </fieldset>
             {decision === S.CON_TECHO && (
               <Campo etiqueta="Tipo de techo" error={intentado && !elegido ? "Elige el tipo de techo." : undefined}>
                 <select id="ficha-tipo-techo" className="field-input" value={codtteCon} onChange={(e) => { elegirTipo(tipos, e.target.value); setError(""); }}>
                   <option value="">Elige el tipo de techo</option>
-                  {tiposOfrecidos.map((t) => <option key={t.codtte} value={t.codtte}>{S.etiquetaTipoTecho(t)}</option>)}
+                  {tiposOfrecidos.map((t) => <option key={t.codtte} value={t.codtte}>{S.etiquetaTipoTecho(t)}{esVenta && instaladoMoto?.codtte === t.codtte ? " · instalado en esta moto" : ""}</option>)}
                 </select>
               </Campo>
             )}
