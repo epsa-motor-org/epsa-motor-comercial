@@ -49,6 +49,7 @@ export function responderErrorVenta(res: Response, error: unknown) {
     PT692: [409, 'La separación antecedente no está convertida y debe revisarse antes de corregir'],
     PT438: [409, 'La unidad destino tiene un techo instalado incompatible con el acuerdo de la venta'],
     PT693: [409, 'La configuración de techo de la unidad destino contradice el acuerdo de la venta'],
+    PT700: [409, 'La operación ya tiene entrega efectiva y no puede corregirse'],
     '23503': [404, 'No se encontró una unidad, comprador, responsable o sede'],
     '23505': [409, 'La unidad o la solicitud ya fue registrada'],
     '23514': [422, 'Los datos de venta o pago no cumplen las reglas permitidas'],

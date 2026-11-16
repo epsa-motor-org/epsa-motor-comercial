@@ -123,6 +123,47 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
   const cancelarVentaHU021 = (codven: string, motivo: string, observacion: string | null, clave = claveNueva()) =>
     escalar<Record<string, unknown>>('SELECT public.hu021_cancelar_venta($1,$2,$3,$4::uuid) r',
       [codven, motivo, observacion, clave]);
+  const corregirVentaHU022 = (
+    codven: string, codcliNuevo: string | null, coduniNuevo: string | null, version: number, clave = claveNueva()
+  ) => escalar<Record<string, unknown>>(
+    'SELECT public.hu022_corregir_venta($1,$2,$3,$4,$5,$6::uuid) r',
+    [codven, codcliNuevo, coduniNuevo, version, 'Corrección de prueba HU-032', clave]);
+  const registrarEntrega = (
+    codven: string, coduni: string, codcli = '1', modalidad: 'Armada' | 'Embalada' = 'Armada',
+    opciones: Partial<{ fecha: string; receptor: string; observacion: string | null; pendientes: boolean;
+      observacionDocumentos: string | null; referenciaGuia: string | null; clave: string }> = {}
+  ) => escalar<Record<string, unknown>>(
+    'SELECT public.hu032_registrar_entrega($1,$2,$3,$4,$5::date,$6,$7,$8,$9,$10,$11::uuid) r',
+    [codven, coduni, codcli, modalidad, opciones.fecha ?? '2026-11-14', opciones.receptor ?? 'Persona receptora QA',
+      opciones.observacion ?? null, opciones.pendientes ?? false, opciones.observacionDocumentos ?? null,
+      opciones.referenciaGuia ?? null, opciones.clave ?? claveNueva()]);
+  const prepararUnidadEntrega = (
+    coduni: string, opciones: Partial<{ codubi: string; codtte: string | null; armado: string; techo: string }> = {}
+  ) => propietario(async () => {
+    if (Object.prototype.hasOwnProperty.call(opciones, 'codtte'))
+      await db.query('UPDATE public.unidad SET codubi=$2,codtte=$3 WHERE coduni=$1',
+        [coduni, opciones.codubi ?? '2', opciones.codtte]);
+    else await db.query('UPDATE public.unidad SET codubi=$2 WHERE coduni=$1', [coduni, opciones.codubi ?? '2']);
+    await db.query(`INSERT INTO public.preparacionunidad(coduni,estarmado,esttecho)
+      VALUES ($1,$2,$3) ON CONFLICT (coduni) DO UPDATE
+      SET estarmado=EXCLUDED.estarmado,esttecho=EXCLUDED.esttecho`,
+      [coduni, opciones.armado ?? 'Terminado', opciones.techo ?? 'No requiere']);
+  });
+  const crearVentaConAcuerdoEntrega = (
+    coduni: string, modalidad: 'Armada' | 'Embalada' = 'Armada',
+    opciones: Partial<{ decision: 'Por definir' | 'Sin techo' | 'Con techo'; codtte: number | null;
+      responsable: number; adicional: number | null }> = {}
+  ) => crearVenta(coduni, {
+    responsable: opciones.responsable ?? 3,
+    fecha: '2026-11-14',
+    entrega: 2,
+    adicional: opciones.adicional ?? null,
+    techo: opciones.decision === 'Con techo'
+      ? { decision: 'Con techo', codtte: opciones.codtte }
+      : { decision: opciones.decision ?? 'Sin techo' },
+    observacion: `Entrega pactada (pendiente): se entregará ${modalidad.toLowerCase()} en Ventanilla HU006.`,
+    clave: claveNueva()
+  });
   const crearTransferenciaSeparacion = async (coduni: string, responsable = 3) => {
     const ruta = `separaciones/${coduni}/hu021-voucher.pdf`;
     await propietario(() => db.query(
@@ -145,8 +186,8 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
        TRUE,3,pg_catalog.clock_timestamp(),$2,'Activa') RETURNING codsep::text r`, [coduni, claveNueva()]));
   const crearMovimientoActivoHU021 = async (coduni: string, estado: 'Pendiente' | 'En transito') => propietario(async () => {
     const ubicaciones = await db.query<{ codubi: string; nomubi: string }>(
-      "SELECT codubi::text,nomubi FROM public.ubicacion WHERE nomubi IN ('Ventanilla','Comas HU006')");
-    const origen = ubicaciones.rows.find(fila => fila.nomubi === 'Ventanilla')!.codubi;
+      "SELECT codubi::text,nomubi FROM public.ubicacion WHERE nomubi IN ('Ventanilla','Ventanilla HU006','Comas HU006')");
+    const origen = ubicaciones.rows.find(fila => fila.nomubi === 'Ventanilla' || fila.nomubi === 'Ventanilla HU006')!.codubi;
     const destino = ubicaciones.rows.find(fila => fila.nomubi === 'Comas HU006')!.codubi;
     await db.query('UPDATE public.unidad SET codubi=$1 WHERE coduni=$2', [origen, coduni]);
     await db.query(`INSERT INTO public.movimientoubicacion(coduni,codubiori,codubides,codusu,obsmub,estmub)
@@ -273,7 +314,15 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await db.exec(leer('supabase/migrations/202611140003_hu021_cancelacion_estado_e_inmutabilidad.sql'));
     await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
     await db.exec(leer('supabase/migrations/202611140005_movimiento_situacion_fisica_comercial.sql'));
-  await db.exec(leer('supabase/migrations/202611150001_hu005_hu006_reglas_po.sql'));
+  await db.exec(leer('supabase/migrations/202611150002_hu005_hu006_reglas_po.sql'));
+  try {
+    await db.exec(leer('supabase/migrations/202611150003_hu032_entrega_moto_vendida.sql'));
+    // El historial canónico debe poder reconstruirse también si el runner la reintenta.
+    await db.exec(leer('supabase/migrations/202611150003_hu032_entrega_moto_vendida.sql'));
+  } catch (error) {
+    await db.exec('ROLLBACK');
+    throw new Error(`HU-032 migration failed: ${(error as Error).message} ${JSON.stringify(error)}`);
+  }
   });
 
   const tipos = await propietario(async () => (await db.query<{ codtte: string }>(
@@ -1461,5 +1510,317 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       'nuevo comprobante en venta cancelada sin comprobante previo');
     assert.equal(await propietario(() => escalar<string>(
       'SELECT refcompven r FROM public.venta WHERE codven=$1', [sinComprobante.codven])), null);
+  });
+
+  await t.test('HU-032: entrega armada, idempotencia, HU-022 y cancelación conservan la entrega', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(1);
+    const venta = await crearVentaConAcuerdoEntrega(unidad, 'Armada');
+    await prepararUnidadEntrega(unidad, { codubi: '2', armado: 'Terminado', techo: 'No requiere' });
+    const snapshot = () => propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('unidad',jsonb_build_object('codubi',u.codubi::text,'codtte',u.codtte::text,
+        'estado',u.estcomuni,'preparacion',(SELECT to_jsonb(p)-'coduni' FROM public.preparacionunidad p WHERE p.coduni=u.coduni),
+        'movimientos',(SELECT count(*)::int FROM public.movimientoubicacion m WHERE m.coduni=u.coduni)),
+        'venta',jsonb_build_object('codcli',v.codcli::text,'coduni',v.coduni::text,'importe',v.impven,
+          'descuento',v.descuentoven,'estado',v.estven,'responsable',v.codusuresp::text,
+          'pagos',(SELECT count(*)::int FROM public.pagoventa p WHERE p.codven=v.codven))) r
+       FROM public.venta v JOIN public.unidad u ON u.coduni=v.coduni WHERE v.codven=$1`, [venta.codven]));
+    const antes = await snapshot();
+    const key = claveNueva();
+    const estadoLista = await escalar<Record<string, unknown>>(
+      'SELECT public.hu032_consultar_entrega($1) r', [venta.codven]);
+    assert.equal(estadoLista.estado, 'Lista para entrega');
+    await login(3);
+    const primera = await registrarEntrega(venta.codven, unidad, '1', 'Armada', { clave: key });
+    assert.equal(primera.conflicto, false);
+    assert.equal(primera.reutilizada, false);
+    assert.equal(primera.estado, 'Entregada');
+    const idPrimero = (primera.entrega as Record<string, unknown>).codentrega;
+    const proyeccionHU022 = await propietario(() => escalar<Record<string, unknown>>(
+      'SELECT public.hu022_proyectar_venta($1) r', [venta.codven]));
+    assert.equal((proyeccionHU022.entrega as Record<string, unknown>).codentrega, idPrimero,
+      'la ficha/proyección HU-022 obtiene la entrega desde la fuente HU-032');
+    const replay = await registrarEntrega(venta.codven, unidad, '1', 'Armada', { clave: key });
+    assert.equal(replay.reutilizada, true);
+    assert.equal((replay.entrega as Record<string, unknown>).codentrega, idPrimero);
+    await assert.rejects(registrarEntrega(venta.codven, unidad, '1', 'Armada', {
+      clave: key, receptor: 'Otro receptor'
+    }), error('PT698'));
+    const conflicto = await registrarEntrega(venta.codven, unidad, '1', 'Armada', { clave: claveNueva() });
+    assert.equal(conflicto.conflicto, true);
+    assert.equal(await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu032_entrega WHERE codven=$1', [venta.codven])), 1);
+    assert.deepEqual(await snapshot(), antes, 'registrar la entrega no modifica ventas, ubicación, techo, movimientos ni preparación');
+
+    await login(1);
+    await assert.rejects(corregirVentaHU022(venta.codven, '2', null, 1), error('PT700'),
+      'HU-022 debe bloquear también la corrección solo de comprador tras una entrega');
+    const unidadIntercambio = await crearUnidadHU021();
+    const ventaIntercambio = await crearVentaConAcuerdoEntrega(unidadIntercambio, 'Embalada');
+    const versiones = await propietario(() => escalar<{ a: number; b: number }>(
+      `SELECT jsonb_build_object('a',(SELECT hu022_versionrelacion FROM public.venta WHERE codven=$1),
+        'b',(SELECT hu022_versionrelacion FROM public.venta WHERE codven=$2)) r`, [venta.codven, ventaIntercambio.codven]));
+    await assert.rejects(escalar(
+      `SELECT public.hu022_intercambiar_ventas($1,NULL,$2,$3,$4,NULL,$5,$6,'Intercambio tras entrega',$7::uuid) r`,
+      [venta.codven, unidadIntercambio, versiones.a, ventaIntercambio.codven, unidad, versiones.b, claveNueva()]), error('PT700'),
+      'HU-022 debe bloquear el intercambio si cualquiera de las ventas tiene entrega efectiva');
+    const cancelada = await cancelarVentaHU021(venta.codven, 'Cancelación posterior a entrega', null);
+    assert.equal(cancelada.entregaConservada, true);
+    assert.equal(cancelada.fechaEntrega, '2026-11-14');
+    assert.equal(cancelada.unidadLiberada, false);
+    assert.equal(cancelada.estadoComercialUnidad, 'Vendida');
+    assert.equal(await estadoComercialHU021(unidad), 'Vendida');
+    const consulta = await escalar<Record<string, unknown>>('SELECT public.hu032_consultar_entrega($1) r', [venta.codven]);
+    assert.equal(consulta.estado, 'Entregada');
+    assert.ok(consulta.entrega);
+    assert.equal(await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu032_entrega WHERE codven=$1', [venta.codven])), 1);
+  });
+
+  await t.test('HU-032: intentos simultáneos de entrega conservan una sola fila (PGlite, una sesión)', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(1);
+    const venta = await crearVentaConAcuerdoEntrega(unidad, 'Embalada');
+    await prepararUnidadEntrega(unidad, { codubi: '2' });
+    const intentos = await Promise.allSettled([
+      registrarEntrega(venta.codven, unidad, '1', 'Embalada', { clave: claveNueva() }),
+      registrarEntrega(venta.codven, unidad, '1', 'Embalada', { clave: claveNueva() })
+    ]);
+    const resultados = intentos.filter((item): item is PromiseFulfilledResult<Record<string, unknown>> => item.status === 'fulfilled')
+      .map(item => item.value);
+    assert.equal(resultados.length, 2);
+    assert.equal(resultados.filter(item => item.conflicto === false).length, 1);
+    assert.equal(resultados.filter(item => item.conflicto === true).length, 1);
+    assert.equal(await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu032_entrega WHERE codven=$1', [venta.codven])), 1);
+  });
+
+  await t.test('HU-032: tabla de entregas no se consulta directamente por anon ni authenticated', async () => {
+    await db.exec('RESET ROLE; SET ROLE anon');
+    await assert.rejects(db.query('SELECT * FROM public.hu032_entrega'), error('42501'));
+    await login(1);
+    await assert.rejects(db.query('SELECT * FROM public.hu032_entrega'), error('42501'));
+  });
+
+  await t.test('HU-032: recepción, modalidad y techo físico se revalidan en PostgreSQL', async () => {
+    const sedeVent = await propietario(() => escalar<string>(
+      "SELECT codubi::text r FROM public.ubicacion WHERE nomubi='Ventanilla HU006'"));
+    const sedeComas = await propietario(() => escalar<string>(
+      "SELECT codubi::text r FROM public.ubicacion WHERE nomubi='Comas HU006'"));
+    const almacen = await propietario(() => escalar<string>(
+      "SELECT codubi::text r FROM public.ubicacion WHERE nomubi='Ancón HU006'"));
+
+    const nuevaVenta = async (modalidad: 'Armada' | 'Embalada', decision: 'Por definir' | 'Sin techo' | 'Con techo' = 'Sin techo', codtte?: number) => {
+      const unidad = await crearUnidadHU021();
+      await login(1);
+      const venta = await crearVentaConAcuerdoEntrega(unidad, modalidad, { decision, codtte });
+      return { unidad, venta };
+    };
+    const intentar = async (caso: string, config: (unidad: string, venta: VentaSQL) => Promise<void>,
+      modalidad: 'Armada' | 'Embalada' = 'Armada', decision: 'Por definir' | 'Sin techo' | 'Con techo' = 'Sin techo', codtte?: number) => {
+      const { unidad, venta } = await nuevaVenta(modalidad, decision, codtte);
+      await config(unidad, venta);
+      await login(3);
+      await assert.rejects(registrarEntrega(venta.codven, unidad, '1', modalidad), error(caso));
+    };
+
+    await intentar('PT696', async unidad => prepararUnidadEntrega(unidad, { codubi: almacen }), 'Embalada');
+    await intentar('PT696', async unidad => {
+      await prepararUnidadEntrega(unidad, { codubi: sedeVent });
+      await crearMovimientoActivoHU021(unidad, 'En transito');
+    });
+    await intentar('PT696', async unidad => prepararUnidadEntrega(unidad, { codubi: sedeComas }));
+    await intentar('PT696', async unidad => prepararUnidadEntrega(unidad, { codubi: sedeVent, armado: 'Pendiente' }));
+    await intentar('PT696', async unidad => prepararUnidadEntrega(unidad, { codubi: sedeVent }), 'Armada', 'Por definir');
+    await intentar('PT696', async unidad => prepararUnidadEntrega(unidad, { codubi: sedeVent }), 'Embalada', 'Por definir');
+    const sinIdentificacion = await nuevaVenta('Embalada');
+    await prepararUnidadEntrega(sinIdentificacion.unidad, { codubi: sedeVent });
+    await propietario(async () => {
+      // Simula una ficha histórica/incompleta sin desactivar la guarda para otras pruebas.
+      await db.exec('ALTER TABLE public.unidad DISABLE TRIGGER hu002_guardar_unidad');
+      try {
+        await db.query("UPDATE public.unidad SET nummotuni='' WHERE coduni=$1", [sinIdentificacion.unidad]);
+      } finally {
+        await db.exec('ALTER TABLE public.unidad ENABLE TRIGGER hu002_guardar_unidad');
+      }
+    });
+    await login(3);
+    await assert.rejects(registrarEntrega(sinIdentificacion.venta.codven, sinIdentificacion.unidad, '1', 'Embalada'), error('PT696'));
+    const sedeFecha = await nuevaVenta('Embalada');
+    await prepararUnidadEntrega(sedeFecha.unidad, { codubi: sedeVent });
+    await login(3);
+    await assert.rejects(registrarEntrega(sedeFecha.venta.codven, sedeFecha.unidad, '1', 'Embalada',
+      { fecha: '2099-01-01' }), error('PT694'));
+    await assert.rejects(registrarEntrega(sedeFecha.venta.codven, sedeFecha.unidad, '2', 'Embalada'), error('PT696'),
+      'el comprador debe coincidir con la venta');
+    await assert.rejects(registrarEntrega(sedeFecha.venta.codven, '99999999', '1', 'Embalada'), error('PT696'),
+      'la unidad indicada debe coincidir con la venta');
+    await assert.rejects(registrarEntrega(sedeFecha.venta.codven, sedeFecha.unidad, '1', 'Embalada',
+      { pendientes: true }), error('PT696'), 'documentos pendientes requieren observación y referencia de guía');
+
+    const ventaCancelada = await nuevaVenta('Embalada');
+    await prepararUnidadEntrega(ventaCancelada.unidad, { codubi: sedeVent });
+    await login(3);
+    await cancelarVentaHU021(ventaCancelada.venta.codven, 'Cancelada antes de entrega', null);
+    await assert.rejects(registrarEntrega(ventaCancelada.venta.codven, ventaCancelada.unidad, '1', 'Embalada'), error('PT696'));
+
+    const ventaCorregida = await nuevaVenta('Embalada');
+    await prepararUnidadEntrega(ventaCorregida.unidad, { codubi: sedeVent });
+    await login(1);
+    await corregirVentaHU022(ventaCorregida.venta.codven, '2', null, 1);
+    await login(3);
+    await assert.rejects(registrarEntrega(ventaCorregida.venta.codven, ventaCorregida.unidad, '1', 'Embalada'), error('PT696'),
+      'la solicitud que conserva el comprador anterior no puede entregar una venta ya corregida');
+  });
+
+  await t.test('HU-032: venta a crédito y entrega embalada con referencia de guía no altera preparación', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(1);
+    const venta = await crearVentaConAcuerdoEntrega(unidad, 'Embalada');
+    await prepararUnidadEntrega(unidad, { codubi: '2', armado: 'Pendiente', techo: 'Pendiente' });
+    const entrega = await registrarEntrega(venta.codven, unidad, '1', 'Embalada', {
+      pendientes: true, observacionDocumentos: 'Tarjeta y placa pendientes', referenciaGuia: 'GR-REFERENCIA-QA'
+    });
+    assert.equal(entrega.conflicto, false);
+    const item = entrega.entrega as Record<string, unknown>;
+    assert.equal(item.modalidad, 'Embalada');
+    assert.equal(item.referenciaGuia, 'GR-REFERENCIA-QA');
+    const fisico = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object('ubicacion',u.codubi::text,'estado',u.estcomuni,
+        'preparacion',(SELECT to_jsonb(p)-'coduni' FROM public.preparacionunidad p WHERE p.coduni=u.coduni),
+        'techo',u.codtte::text,'importe',v.impven,'adelanto',
+          (SELECT s.monadesep FROM public.separacion s WHERE s.codsep=v.codsep)) r
+       FROM public.unidad u JOIN public.venta v ON v.coduni=u.coduni WHERE v.codven=$1`, [venta.codven]));
+    assert.equal((fisico.preparacion as Record<string, unknown>).estarmado, 'Pendiente');
+    assert.equal((fisico.preparacion as Record<string, unknown>).esttecho, 'Pendiente');
+    assert.equal(fisico.ubicacion, '2');
+    assert.equal(fisico.estado, 'Vendida');
+    assert.equal(Number(fisico.importe), Number(venta.importe));
+  });
+
+  await t.test('HU-032: vendedor debe ser responsable vigente; gerente y administradora pueden registrar', async () => {
+    const unidadVendedor = await crearUnidadHU021();
+    await login(1);
+    const ventaVendedor = await crearVentaConAcuerdoEntrega(unidadVendedor, 'Embalada', { responsable: 6 });
+    await prepararUnidadEntrega(unidadVendedor, { codubi: '2' });
+    await login(3);
+    await assert.rejects(registrarEntrega(ventaVendedor.codven, unidadVendedor, '1', 'Embalada'), error('PT697'));
+    await login(6);
+    assert.equal((await registrarEntrega(ventaVendedor.codven, unidadVendedor, '1', 'Embalada')).conflicto, false);
+
+    const unidadAdmin = await crearUnidadHU021();
+    await login(1);
+    const ventaAdmin = await crearVentaConAcuerdoEntrega(unidadAdmin, 'Embalada');
+    await prepararUnidadEntrega(unidadAdmin, { codubi: '2' });
+    await login(2);
+    assert.equal((await registrarEntrega(ventaAdmin.codven, unidadAdmin, '1', 'Embalada')).conflicto, false);
+
+    const unidadInactiva = await crearUnidadHU021();
+    await login(1);
+    const ventaInactiva = await crearVentaConAcuerdoEntrega(unidadInactiva, 'Embalada');
+    await prepararUnidadEntrega(unidadInactiva, { codubi: '2' });
+    await propietario(() => db.query('UPDATE public.usuario SET estusu=false WHERE codusu=3'));
+    await login(3);
+    await assert.rejects(registrarEntrega(ventaInactiva.codven, unidadInactiva, '1', 'Embalada'), error('42501'));
+    await propietario(() => db.query('UPDATE public.usuario SET estusu=true WHERE codusu=3'));
+  });
+
+  await t.test('HU-032: techo Con techo requiere tipo exacto instalado; modalidad requiere acuerdo explícito', async () => {
+    const lona = Number(tiposCanonicos['Lona']!.codtte);
+    const fibra = Number(tiposCanonicos['Techo clásico de fibra']!.codtte);
+    const adicionalLona = Number(tiposCanonicos['Lona']!.adicionalref);
+    const unidadExacta = await crearUnidadHU021();
+    await login(1);
+    await propietario(() => db.query('UPDATE public.unidad SET codtte=$2 WHERE coduni=$1', [unidadExacta, lona]));
+    const ventaExacta = await crearVentaConAcuerdoEntrega(unidadExacta, 'Armada', { decision: 'Por definir' });
+    await guardarTechoVenta(ventaExacta.codven, 'Con techo', lona, adicionalLona);
+    await prepararUnidadEntrega(unidadExacta, { codubi: '2', codtte: String(lona), armado: 'Terminado', techo: 'Instalado' });
+    await login(1);
+    assert.equal((await registrarEntrega(ventaExacta.codven, unidadExacta, '1', 'Armada')).conflicto, false);
+
+    const unidadNoInstalada = await crearUnidadHU021();
+    await login(1);
+    await propietario(() => db.query('UPDATE public.unidad SET codtte=$2 WHERE coduni=$1', [unidadNoInstalada, lona]));
+    const ventaNoInstalada = await crearVentaConAcuerdoEntrega(unidadNoInstalada, 'Armada', { decision: 'Por definir' });
+    await guardarTechoVenta(ventaNoInstalada.codven, 'Con techo', lona, adicionalLona);
+    await prepararUnidadEntrega(unidadNoInstalada, { codubi: '2', armado: 'Terminado', techo: 'Pendiente' });
+    await assert.rejects(registrarEntrega(ventaNoInstalada.codven, unidadNoInstalada, '1', 'Armada'), error('PT696'));
+
+    const unidadFisicaDistinta = await crearUnidadHU021();
+    await login(1);
+    await propietario(() => db.query('UPDATE public.unidad SET codtte=$2 WHERE coduni=$1', [unidadFisicaDistinta, fibra]));
+    const ventaFisicaDistinta = await crearVentaConAcuerdoEntrega(unidadFisicaDistinta, 'Armada', { decision: 'Por definir' });
+    await guardarTechoVenta(ventaFisicaDistinta.codven, 'Con techo', lona, adicionalLona);
+    await prepararUnidadEntrega(unidadFisicaDistinta, { codubi: '2', armado: 'Terminado', techo: 'Instalado' });
+    await assert.rejects(registrarEntrega(ventaFisicaDistinta.codven, unidadFisicaDistinta, '1', 'Armada'), error('PT696'));
+
+    const unidadSinAcuerdo = await crearUnidadHU021();
+    await login(1);
+    const ventaSinAcuerdo = await crearVenta(unidadSinAcuerdo, {
+      responsable: 3, fecha: '2026-11-14', entrega: 2, techo: { decision: 'Sin techo' }, clave: claveNueva()
+    });
+    await prepararUnidadEntrega(unidadSinAcuerdo, { codubi: '2' });
+    await assert.rejects(registrarEntrega(ventaSinAcuerdo.codven, unidadSinAcuerdo, '1', 'Embalada'), error('PT696'));
+  });
+
+  await t.test('HU-032: Sin techo armado requiere compatibilidad física y GET refleja la misma regla; Embalada conserva excepción', async () => {
+    const lona = Number(tiposCanonicos['Lona']!.codtte);
+
+    const unidadSinTecho = await crearUnidadHU021();
+    await login(1);
+    const ventaSinTecho = await crearVentaConAcuerdoEntrega(unidadSinTecho, 'Armada', { decision: 'Sin techo' });
+    await prepararUnidadEntrega(unidadSinTecho, { codubi: '2', armado: 'Terminado', techo: 'No requiere' });
+    const listaSinTecho = await escalar<Record<string, unknown>>(
+      'SELECT public.hu032_consultar_entrega($1) r', [ventaSinTecho.codven]);
+    assert.equal(listaSinTecho.estado, 'Lista para entrega');
+    await login(3);
+    assert.equal((await registrarEntrega(ventaSinTecho.codven, unidadSinTecho, '1', 'Armada')).conflicto, false);
+
+    const unidadConTechoAnterior = await crearUnidadHU021();
+    await login(1);
+    await propietario(() => db.query('UPDATE public.unidad SET codtte=$2 WHERE coduni=$1', [unidadConTechoAnterior, lona]));
+    const ventaSinTechoConAnterior = await crearVentaConAcuerdoEntrega(
+      unidadConTechoAnterior, 'Armada', { decision: 'Sin techo' });
+    await prepararUnidadEntrega(unidadConTechoAnterior, {
+      codubi: '2', codtte: String(lona), armado: 'Terminado', techo: 'Instalado'
+    });
+
+    const noLista = await escalar<Record<string, unknown>>(
+      'SELECT public.hu032_consultar_entrega($1) r', [ventaSinTechoConAnterior.codven]);
+    assert.equal(noLista.estado, 'Vendida pendiente de entrega');
+    assert.ok((noLista.condicionesFaltantes as string[]).some(condicion => condicion.includes('techo físicamente instalado')));
+    await login(3);
+    await assert.rejects(registrarEntrega(ventaSinTechoConAnterior.codven, unidadConTechoAnterior, '1', 'Armada'), error('PT696'));
+
+    await login(1);
+    const versionTecho = Number(await propietario(() => escalar<string>(
+      'SELECT versionprep::text r FROM public.preparacionunidad WHERE coduni=$1', [unidadConTechoAnterior])));
+    await escalar('SELECT public.hu033_actualizar_preparacion_unidad($1,$2,$3,$4,$5,$6,$7) r', [
+      unidadConTechoAnterior, 'Techo', 'Pendiente', versionTecho,
+      'Retiro físico del techo anterior confirmado', 'Interno', claveNueva()
+    ]);
+    const listaTrasRetiro = await escalar<Record<string, unknown>>(
+      'SELECT public.hu032_consultar_entrega($1) r', [ventaSinTechoConAnterior.codven]);
+    assert.equal(listaTrasRetiro.estado, 'Lista para entrega');
+    await login(3);
+    assert.equal((await registrarEntrega(
+      ventaSinTechoConAnterior.codven, unidadConTechoAnterior, '1', 'Armada'
+    )).conflicto, false);
+
+    const unidadEmbalada = await crearUnidadHU021();
+    await login(1);
+    await propietario(() => db.query('UPDATE public.unidad SET codtte=$2 WHERE coduni=$1', [unidadEmbalada, lona]));
+    const ventaEmbaladaSinTecho = await crearVentaConAcuerdoEntrega(
+      unidadEmbalada, 'Embalada', { decision: 'Sin techo' });
+    await prepararUnidadEntrega(unidadEmbalada, {
+      codubi: '2', codtte: String(lona), armado: 'Pendiente', techo: 'Pendiente'
+    });
+    const listaEmbalada = await escalar<Record<string, unknown>>(
+      'SELECT public.hu032_consultar_entrega($1) r', [ventaEmbaladaSinTecho.codven]);
+    assert.equal(listaEmbalada.estado, 'Lista para entrega embalada');
+    await login(3);
+    assert.equal((await registrarEntrega(
+      ventaEmbaladaSinTecho.codven, unidadEmbalada, '1', 'Embalada'
+    )).conflicto, false);
   });
 });
