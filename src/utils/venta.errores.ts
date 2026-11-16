@@ -33,6 +33,7 @@ export function responderErrorVenta(res: Response, error: unknown) {
     PT623: [409, 'La venta está cancelada y ya no se puede modificar'],
     PT624: [422, 'Los datos del descuento comercial no son válidos o están incompletos'],
     PT625: [422, 'El autorizador del descuento no existe, está inactivo o no es Gerente o Administradora'],
+    PT626: [403, 'El vendedor solo puede registrarse como responsable de la venta'],
     PT680: [404, 'No se encontró la venta solicitada'],
     PT681: [400, 'Los datos de la corrección no son válidos'],
     PT682: [422, 'El comprador destino no existe o está inactivo'],

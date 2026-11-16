@@ -316,8 +316,9 @@ test('HU-006 HTTP: valida el comprobante posterior y mapea conflicto sin filtrar
 test('HU-006 HTTP: mapea errores de negocio y contrato sin filtrar detalles internos', async () => {
   const casos: Array<[string, number]> = [
     ['PT604', 409], ['PT605', 409], ['PT611', 409], ['PT612', 422], ['PT613', 409],
-    ['PT624', 422], ['PT625', 422],
+    ['PT624', 422], ['PT625', 422], ['PT626', 403],
     ['PT615', 422], ['PT617', 422], ['PT618', 409], ['PT620', 422], ['PT621', 422], ['PT622', 400],
+    ['23505', 409], ['40001', 409], ['40P01', 409],
     ['22P02', 400], ['22003', 422], ['PGRST202', 503], ['XX000', 500]
   ];
   for (const [codigo, status] of casos) await entorno(async base => {

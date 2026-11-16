@@ -214,7 +214,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
   await login(1);
   await escalar('SELECT public.hu002_identificar_unidades($1,$2::jsonb) r', [compra, JSON.stringify(unidades)]);
   const codunis = await propietario(async () => (await db.query<{ coduni: string }>(
-    "SELECT coduni::text FROM public.unidad WHERE nummotuni LIKE 'HU006-M-%' ORDER BY coduni"
+    "SELECT coduni::text FROM public.unidad WHERE nummotuni LIKE 'HU006-M-%' ORDER BY public.unidad.coduni"
   )).rows.map(r => r.coduni));
   const tiposHistoricos = await propietario(async () => Object.fromEntries((await db.query<{
     nomtte: string; codtte: string
@@ -273,6 +273,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await db.exec(leer('supabase/migrations/202611140003_hu021_cancelacion_estado_e_inmutabilidad.sql'));
     await db.exec(leer('supabase/migrations/202611140004_hu022_techo_instalado_e_historial.sql'));
     await db.exec(leer('supabase/migrations/202611140005_movimiento_situacion_fisica_comercial.sql'));
+  await db.exec(leer('supabase/migrations/202611150001_hu005_hu006_reglas_po.sql'));
   });
 
   const tipos = await propietario(async () => (await db.query<{ codtte: string }>(
@@ -542,7 +543,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await assert.rejects(escalar("SELECT public.hu006_listar_ventas(NULL,50,0) r"), error('42501'));
   });
 
-  await t.test('Importe y techo: permite Por definir, Sin techo, Con techo compatible; bloquea techo instalado incompatible', async () => {
+  await t.test('Importe y techo: permite las decisiones comerciales aunque el techo esté instalado', async () => {
     await login(3);
     const lona = Number(tipos);
     const sin = await crearVenta(codunis[13]!, { techo: { decision: 'Sin techo' }, clave: claveNueva() });
@@ -564,7 +565,10 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       await db.query("UPDATE preparacionunidad SET esttecho='Instalado' WHERE coduni=$1", [codunis[16]]);
     });
     await login(3);
-    await assert.rejects(crearVenta(codunis[16]!, { techo: { decision: 'Sin techo' }, clave: claveNueva() }), error('PT613'));
+    const sinTechoConFisicoInstalado = await crearVenta(codunis[16]!, {
+      techo: { decision: 'Sin techo' }, clave: claveNueva()
+    });
+    assert.equal(sinTechoConFisicoInstalado.techo.decision, 'Sin techo');
     await login(1);
     await propietario(async () => {
       await db.query('UPDATE unidad SET codtte=$1 WHERE coduni=$2', [lona, codunis[17]]);
@@ -581,9 +585,11 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       await db.query("UPDATE preparacionunidad SET esttecho='Instalado' WHERE coduni=$1", [codunis[32]]);
     });
     await login(3);
-    await assert.rejects(crearVenta(codunis[32]!, {
+    const otroTipoConFisicoInstalado = await crearVenta(codunis[32]!, {
       techo: { decision: 'Con techo', codtte: Number(incompatible) }, adicional: 1700, clave: claveNueva()
-    }), error('PT613'));
+    });
+    assert.equal(otroTipoConFisicoInstalado.techo.decision, 'Con techo');
+    assert.equal(otroTipoConFisicoInstalado.techo.codtte, incompatible);
     await assert.rejects(crearVenta(codunis[33]!, {
       techo: { decision: 'Con techo', codtte: lona }, adicional: -1, clave: claveNueva()
     }), error('PT620'));
@@ -758,11 +764,18 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await assert.rejects(escalar("SELECT public.hu006_guardar_techo_venta($1,'Sin techo',NULL,NULL) r", [gerente.codven]), error('42501'));
     await assert.rejects(guardarComprobante(gerente.codven, 'F001-AUXILIAR'), error('42501'));
     await assert.rejects(crearVenta(codunis[21]!, { clave: claveNueva() }), error('42501'));
-    await login(3);
-    await assert.rejects(crearVenta(codunis[24]!, { responsable: 5, clave: claveNueva() }), error('PT607'),
-      'la cuenta técnica concreta no debe asignarse como responsable comercial');
-    const responsableInternoValido = await crearVenta(codunis[24]!, { responsable: 6, clave: claveNueva() });
+    await login(1);
+    const unidadResponsableTecnico = await crearUnidadHU021();
+    await assert.rejects(crearVenta(unidadResponsableTecnico, { responsable: 5, clave: claveNueva() }), error('PT607'),
+      'la cuenta técnica de integración no se puede asignar como responsable comercial');
+    const responsableInternoValido = await crearVenta(unidadResponsableTecnico, { responsable: 6, clave: claveNueva() });
     assert.equal(responsableInternoValido.responsable.codusu, '6');
+    await login(3);
+    const unidadVendedor = await crearUnidadHU021();
+    await assert.rejects(crearVenta(unidadVendedor, { responsable: 6, clave: claveNueva() }), error('PT626'),
+      'el vendedor no puede asignar a otro usuario aunque tenga rol comercial');
+    const ventaPropia = await crearVenta(unidadVendedor, { responsable: 3, clave: claveNueva() });
+    assert.equal(ventaPropia.responsable.codusu, '3');
     await assert.rejects(db.query('SELECT * FROM public.venta'), error('42501'));
     await assert.rejects(db.query('SELECT * FROM public.pagoventa'), error('42501'));
     await assert.rejects(db.query(`INSERT INTO public.venta(coduni,codcli,codusu,fecven,modcomven,estven)
