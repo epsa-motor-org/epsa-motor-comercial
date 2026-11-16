@@ -141,7 +141,8 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
           </div>
           <dl className="divide-y divide-slate-100 text-[13.5px] dark:divide-white/10">
             <Dato k="Moto">{moto}</Dato>
-            <Dato k="La moto queda" data="estado-moto"><span data-estado-moto={hecho.estadoComercialUnidad}>{C.textoEstadoMoto(hecho.estadoComercialUnidad, trasladoDe(unidad))}</span></Dato>
+            <Dato k="La moto queda" data="estado-moto"><span data-estado-moto={hecho.estadoComercialUnidad}>{hecho.entregaConservada ? "Sigue vendida: ya se entregó al comprador" : C.textoEstadoMoto(hecho.estadoComercialUnidad, trasladoDe(unidad))}</span></Dato>
+            {hecho.entregaConservada && <Dato k="Entrega" data="entrega-conservada">{`Se conserva la entrega${hecho.fechaEntrega ? ` del ${fechaLarga(String(hecho.fechaEntrega).slice(0, 10))}` : ""}: la moto no se libera. El retorno y si se vuelve a ofrecer lo decide el gerente.`}</Dato>}
             <Dato k="Motivo">{hecho.motivo}</Dato>
             {hecho.observacionDinero && <Dato k="Dinero recibido">{hecho.observacionDinero}</Dato>}
             {esVenta && f.totalRecibido !== undefined && <Dato k="Se conserva" data="conserva"><span className="cifra">{S.soles(f.totalRecibido)}</span> recibido{f.comprobanteExternoConservado ? " y el comprobante" : ""}</Dato>}
@@ -155,7 +156,7 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
 
   return (
     <Modal abierto onClose={onClose} titulo={titulo} ancho="max-w-xl" sinAvisoCambios={Boolean(enviando)}
-      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre para vender si no tiene otro compromiso. Si está en traslado, el traslado sigue igual.`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); return !e.motivo && !e.observacion && !bloqueada; } }}
+      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre para vender si no tiene otro compromiso. Si está en traslado, el traslado sigue igual.${esVenta ? " Si la moto ya se entregó, la entrega se conserva y la moto no se libera." : ""}`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); return !e.motivo && !e.observacion && !bloqueada; } }}
       pie={<>
         <button type="button" className="btn btn-secondary !py-2" onClick={onClose} data-volver-cancelacion>Volver</button>
         <button form="f-cancelar" className="btn !py-2 bg-acento text-white hover:bg-acento-600 disabled:opacity-60" disabled={Boolean(enviando) || bloqueada} data-confirmar-cancelacion>{enviando || titulo}</button>

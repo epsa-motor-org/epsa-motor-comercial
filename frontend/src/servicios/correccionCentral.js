@@ -126,6 +126,8 @@ export function errorCorreccion(er) {
     return { texto: "No se cambió: solo el gerente y la administradora corrigen ventas." };
   }
   if (st === 404) return { texto: "No se encontró esta venta. Actualiza la ficha.", bloquear: true };
+  // HU-032: con la entrega registrada no hay corrección ordinaria (PT700)
+  if (/entrega efectiva/i.test(msg)) return { texto: "Esta venta ya tiene la entrega registrada: no se corrige el comprador ni la moto. Si hay que revertirla, se cancela la venta con la decisión del gerente.", bloquear: true };
   if (/cambi[oó] desde la consulta|relaci[oó]n cambi/i.test(msg)) return { texto: "Otra persona cambió esta venta mientras la revisabas. Se volvió a leer: revisa los datos y confirma de nuevo.", recargar: true };
   if (/no cambia/i.test(msg)) return { texto: "La corrección no cambia nada: elige otro comprador u otra moto." };
   if (/idempotency/i.test(msg)) return { texto: "Este intento ya se usó con otros datos. Vuelve a confirmar para enviarlo como un intento nuevo.", nuevaClave: true };

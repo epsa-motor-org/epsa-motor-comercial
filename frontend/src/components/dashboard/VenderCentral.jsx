@@ -30,6 +30,8 @@ import { IconCheck } from "../Icons";
 import { BuscarInteresado, CabeceraMoto, ElegirTechoModal, Opcion, VistaCaptura } from "./SepararCentral";
 import { BotonCancelar, NotaPermisoCancelar } from "./CancelarCentral";
 import { BotonCorregir } from "./CorregirCentral";
+import { EntregaVenta } from "./EntregaCentral";
+import * as E from "../../servicios/entregaCentral";
 import { VENTA } from "../../servicios/cancelacionCentral";
 
 const NO_CONFIRMADO = "No se pudo confirmar si la venta se guardó porque falló la conexión. Vuelve a pulsar «Registrar venta»: este mismo envío no se registrará dos veces.";
@@ -752,14 +754,20 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
 // Ficha de la moto: venta registrada
 // ---------------------------------------------------------------------------------------------
 // HU-021: «Cancelar venta» (onCancelar) para el gerente, la administradora o el vendedor responsable vigente
-export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, onCorregir, version = 0 }) {
+export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, onCorregir, onEntrega, version = 0 }) {
   const toast = useToast();
   const activo = unidad?.comercial === "Vendida";
   const consulta = useConsultaCentral(() => V.ventaDeUnidadApi(unidad.coduni), [unidad?.coduni, version], { activo, intervalo: 20000, clave: `venta:${unidad?.coduni}` });
   const [eligiendo, setEligiendo] = useState(false);
   const [comprobante, setComprobante] = useState(false);
   const vta = consulta.data;
+  // HU-032: entrega efectiva de esta venta (la preparación y la ubicación se revisan en el servidor)
+  const prepClave = `${unidad?.preparacion?.estado || ""}|${unidad?.ubicacion?.codubi || ""}|${unidad?.movimiento_activo?.estado || ""}|${vta?.techo?.decision || ""}`;
+  const entrega = useConsultaCentral(() => E.entregaDeVentaApi(vta.codven), [vta?.codven, version, prepClave], { activo: Boolean(activo && vta?.codven), intervalo: 20000, clave: `entrega:${vta?.codven}` });
+  const estadoEntrega = entrega.data?.estado || "";
+  useEffect(() => { onEntrega?.(entrega.data || null); }, [entrega.data]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!activo) return null;
+  const entregada = estadoEntrega === E.ENTREGADA;
   async function verEvidencia(ruta) {
     const ventana = window.open("", "_blank");
     try { const url = await V.urlEvidenciaVentaApi(ruta); if (ventana) ventana.location.href = url; else window.open(url, "_blank"); }
@@ -782,11 +790,11 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-marino dark:text-white">Venta registrada</h2>
-          <p className="text-[13px] text-slate-500">Vendida, pendiente de entrega. La venta no confirma llegada, preparación ni entrega.</p>
+          <p className="text-[13px] text-slate-500" data-venta-subtitulo>{entregada ? `Entregada al comprador${entrega.data?.entrega?.fecha ? ` el ${fechaLarga(entrega.data.entrega.fecha)}` : ""}.` : "Vendida, pendiente de entrega. La venta no confirma llegada, preparación ni entrega."}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {vta && puedeEditar && !vta.comprobanteExterno && <button className="btn btn-secondary !py-2 text-[13px]" onClick={() => setComprobante(true)} data-registrar-comprobante>Registrar comprobante</button>}
-          {vta && <BotonCorregir venta={vta} onCorregir={onCorregir} />}
+          {vta && !entregada && <BotonCorregir venta={vta} onCorregir={onCorregir} />}
           {vta && <BotonCancelar tipo={VENTA} operacion={vta} onCancelar={onCancelar} />}
         </div>
       </div>
@@ -831,14 +839,16 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
           <Fila k={vta.modalidad === "Crédito" ? "Saldo a crédito" : "Saldo pendiente"} data="saldo"><span className="cifra" data-saldo-venta={vta.saldo}>{S.soles(vta.saldo)}</span></Fila>
           <Fila k="Sede de atención">{vta.sedeAtencion?.nombre}</Fila>
           <Fila k="Ubicación de la moto">{x.texto}</Fila>
-          <Fila k="Entrega pactada" data="entrega">{obs.entrega ? `Se entregará ${obs.entrega}${vta.sedeEntregaPrevista && !/\ben\b/.test(obs.entrega) ? ` en ${vta.sedeEntregaPrevista.nombre}` : ""}` : vta.sedeEntregaPrevista ? `En ${vta.sedeEntregaPrevista.nombre}` : "Por acordar"}<span className="block text-[12px] font-normal text-slate-500">Acuerdo pendiente: la moto no está armada ni entregada por registrar la venta.</span></Fila>
-          <Fila k="Preparación actual" data="preparacion"><span data-etapa-preparacion={prep.etapa}>{prep.etapa}</span>{prep.nota && <span className="block text-[12px] font-normal text-slate-500">{prep.nota}</span>}</Fila>
+          <Fila k={entregada ? "Entrega acordada" : "Entrega pactada"} data="entrega">{obs.entrega ? `Se entregará ${obs.entrega}${vta.sedeEntregaPrevista && !/\ben\b/.test(obs.entrega) ? ` en ${vta.sedeEntregaPrevista.nombre}` : ""}` : vta.sedeEntregaPrevista ? `En ${vta.sedeEntregaPrevista.nombre}` : "Por acordar"}{!entregada && <span className="block text-[12px] font-normal text-slate-500">Acuerdo pendiente: la moto no está armada ni entregada por registrar la venta.</span>}</Fila>
+          <Fila k="Preparación actual" data="preparacion"><span data-etapa-preparacion={prep.etapa}>{entregada ? `Ya entregada al comprador (preparación: ${prep.etapa.toLowerCase()})` : prep.etapa}</span>{prep.nota && !entregada && <span className="block text-[12px] font-normal text-slate-500">{prep.nota}</span>}</Fila>
           <Fila k="Comprobante">{vta.comprobanteExterno ? `${vta.comprobanteExterno.referencia}, emitido el ${fechaLarga(vta.comprobanteExterno.fecha)}` : <span className="text-amber-700 dark:text-amber-300">Sin comprobante registrado</span>}<span className="block text-[12px] font-normal text-slate-500">La boleta o factura la emite EPSA en SUNAT; aquí solo se guarda su serie, número y fecha.</span></Fila>
           <Fila k="Responsable">{vta.responsable?.nombre || "Sin responsable asignado"}</Fila>
           <Fila k="Fecha de la venta">{`${fechaLarga(V.soloFecha(vta.fechaVenta))}, registrada por ${vta.autor?.nombre || ""}`}</Fila>
           {obs.resto && <Fila k="Observación">{obs.resto}</Fila>}
         </dl>
       )}
+      {vta && <EntregaVenta venta={vta} unidad={unidad} consulta={entrega} puedeEditar={puedeEditar} onCambio={listo} />}
+      {vta && entregada && onCorregir && <p className="mt-3 text-[12px] text-slate-500" data-nota-corregir-entregada>Corrección: con la entrega registrada ya no se corrige el comprador ni la moto. Si hay que revertirla, se cancela la venta con la decisión del gerente.</p>}
       {vta && onCancelar && <NotaPermisoCancelar operacion={vta} />}
       {eligiendo && vta && <ElegirTechoModal unidad={unidad} comprador={vta.comprador} que="venta" venta={vta} guardar={(d, tipo, adicional) => V.guardarTechoVentaApi(vta.codven, d, tipo, adicional)} onClose={() => setEligiendo(false)} onGuardado={() => { setEligiendo(false); listo(); }} />}
       {comprobante && vta && <ComprobanteModal venta={vta} onClose={() => setComprobante(false)} onGuardado={() => { setComprobante(false); listo(); }} />}

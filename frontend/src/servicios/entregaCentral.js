@@ -1,0 +1,84 @@
+// HU-032 · Registrar la entrega efectiva de una moto vendida (contrato de Michelle del 15/11, docs/HU-032.md)
+// La entrega es un hecho propio: no se deduce de la factura, los pagos, la ubicación, la preparación ni un traslado.
+// GET /api/ventas/:codven/entrega dice si la venta está «Vendida pendiente de entrega», «Lista para entrega»,
+// «Lista para entrega embalada», «Entregada» o «Venta cancelada», con las condiciones que faltan.
+// POST /api/ventas/:codven/entrega registra la entrega con una clave de intento (Idempotency-Key): un reintento no
+// la duplica. El servidor vuelve a comprobar todo al confirmar (responsable vigente, sede, tránsito, armado y techo).
+// La entrega no cambia la venta, los pagos, la ubicación, el techo ni la preparación de la moto.
+import { pedir } from "../lib/api";
+import * as S from "./separacionCentral";
+
+export const entregaDeVentaApi = (codven) => pedir(`/api/ventas/${codven}/entrega`).then((r) => r.data ?? null);
+// 201 nueva; 200 si era el mismo envío y ya estaba registrada
+export const registrarEntregaApi = (codven, cuerpo, clave) =>
+  pedir(`/api/ventas/${codven}/entrega`, { metodo: "POST", cuerpo, headers: { "Idempotency-Key": clave } });
+
+export const ENTREGADA = "Entregada";
+export const LISTA = "Lista para entrega";
+export const LISTA_EMBALADA = "Lista para entrega embalada";
+export const PENDIENTE = "Vendida pendiente de entrega";
+export const CANCELADA = "Venta cancelada";
+export const lista = (e) => e?.estado === LISTA || e?.estado === LISTA_EMBALADA;
+export const TONO_ENTREGA = { [ENTREGADA]: "verde", [LISTA]: "verde", [LISTA_EMBALADA]: "verde", [PENDIENTE]: "ambar", [CANCELADA]: "gris" };
+
+// Quién la registra (para mostrar el botón; el servidor decide): gerente y administradora; un vendedor solo si es el
+// responsable comercial vigente de la venta.
+export function permisoEntrega(user, venta) {
+  const rol = String(user?.rol || "").toLowerCase();
+  if (rol === "gerente" || rol === "administradora") return { puede: true, texto: "" };
+  if (rol !== "vendedor") return { puede: false, texto: "Tu rol no registra entregas." };
+  const r = venta?.responsable;
+  if (r?.codusu && String(r.codusu) === String(user?.codusu ?? "")) return { puede: true, texto: "" };
+  return { puede: false, texto: `La registra su responsable${r?.nombre ? ` (${r.nombre})` : ""}, el gerente o la administradora.` };
+}
+
+export const MAX_RECEPTOR = 200;
+export const MAX_OBSERVACION = 1000;
+export const MAX_GUIA = 250;
+const CONTROL = /[\u0000-\u001f\u007f]/;
+const limpio = (t) => S.limpio(String(t ?? "").replace(/\s+/g, " "));
+
+// Validación del formulario (la misma del servidor; además, la fecha no puede ser anterior a la venta)
+export function erroresEntrega(f, { hoy, fechaVenta = "" } = {}) {
+  const e = {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f.fecha || "")) e.fecha = "Indica la fecha real de la entrega.";
+  else if (hoy && f.fecha > hoy) e.fecha = "La fecha de entrega no puede ser futura: registra la entrega cuando ocurra.";
+  else if (fechaVenta && f.fecha < fechaVenta) e.fecha = "La fecha de entrega no puede ser anterior a la venta.";
+  const receptor = limpio(f.receptor);
+  if (!receptor) e.receptor = "Indica quién recibió la moto.";
+  else if (receptor.length > MAX_RECEPTOR || CONTROL.test(f.receptor)) e.receptor = `Máximo ${MAX_RECEPTOR} caracteres, sin símbolos raros.`;
+  else if (!/\p{L}{2,}/u.test(receptor)) e.receptor = "Escribe el nombre de quien recibió la moto.";
+  if (f.documentosPendientes) {
+    if (!limpio(f.observacionDocumentos)) e.observacionDocumentos = "Indica qué documentos quedan pendientes (por ejemplo, tarjeta y placa).";
+    if (!limpio(f.referenciaGuia)) e.referenciaGuia = "Registra la referencia de la guía de remisión.";
+  }
+  if (limpio(f.observacionDocumentos).length > MAX_OBSERVACION) e.observacionDocumentos = `Máximo ${MAX_OBSERVACION} caracteres.`;
+  if (limpio(f.referenciaGuia).length > MAX_GUIA) e.referenciaGuia = `Máximo ${MAX_GUIA} caracteres.`;
+  if (limpio(f.observacion).length > MAX_OBSERVACION) e.observacion = `Máximo ${MAX_OBSERVACION} caracteres.`;
+  return e;
+}
+
+export function cuerpoEntrega(f, venta, estado) {
+  const pendientes = Boolean(f.documentosPendientes);
+  return {
+    coduni: Number(venta.coduni ?? estado?.coduni),
+    codcli: Number(venta.comprador?.codcli ?? estado?.codcli),
+    modalidad: estado?.modalidadAcordada,
+    fecha: f.fecha,
+    receptor: limpio(f.receptor),
+    documentosPendientes: pendientes,
+    ...(limpio(f.observacion) ? { observacion: limpio(f.observacion) } : {}),
+    ...(pendientes ? { observacionDocumentos: limpio(f.observacionDocumentos), referenciaGuia: limpio(f.referenciaGuia) } : {}),
+  };
+}
+
+// Mensaje claro para los errores al registrar
+export function textoErrorEntrega(e) {
+  const m = String(e?.message || "");
+  if (e?.status === 403) return /responsable/i.test(m) ? "Solo el responsable vigente de la venta, el gerente o la administradora pueden registrar esta entrega. Si cambió el responsable, recarga la ficha." : "No tienes permiso para registrar esta entrega.";
+  if (/ya tiene una entrega/i.test(m) || e?.detalle?.data?.entregaExistente) return "Esta moto ya tiene una entrega registrada. No se registró otra.";
+  if (/condiciones actuales/i.test(m)) return "La moto ya no cumple las condiciones para entregarse (cambió la venta, la ubicación, el traslado, el armado o el techo). No se registró la entrega: revisa lo que falta.";
+  if (/Idempotency/i.test(m)) return "Este intento ya se usó con otros datos. Vuelve a abrir la ventana y registra de nuevo.";
+  if (/cambió|modificando/i.test(m)) return `${m}. No se registró la entrega.`;
+  return m || "No se pudo registrar la entrega.";
+}

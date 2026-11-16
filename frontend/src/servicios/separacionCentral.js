@@ -268,10 +268,8 @@ export function techoConfiguradoDe(unidad, tipos = []) {
   const estado = po?.estado || unidad?.preparacion?.techo?.avance || "Pendiente";
   return { codtte: String(tipo?.codtte ?? po.codtte), nombre: tipo?.nombre || nombreCfg || "Techo", instalado: estado === "Instalado", estado };
 }
-// Regla del PO (13/11, EMT-154/10115): solo un techo instalado físicamente restringe la elección del comprador.
-// Una moto con techo instalado solo se separa o vende con ese mismo techo o con el techo «Por definir»
-// (CP-006-07 y CP-006-11; la base lo revisa con PT438). Un techo solo configurado, todavía sin instalar, no
-// restringe: se muestra la diferencia para que la configuración se ajuste en la ficha.
+// Techo instalado físicamente (HU-033). Desde el 15/11 ya no restringe la separación ni la venta (queda la adecuación
+// pendiente); la corrección de HU-022 sí lo usa para elegir una moto compatible con lo vendido.
 export function techoDeLaMoto(unidad, tipos = []) {
   const x = techoConfiguradoDe(unidad, tipos);
   return x?.instalado ? x : null;
@@ -279,10 +277,6 @@ export function techoDeLaMoto(unidad, tipos = []) {
 // Con un techo instalado, una decisión es compatible si es «Por definir» o ese mismo techo
 export const compatibleConInstalado = (instalado, decision, tipo) => !instalado || decision === POR_DEFINIR || (decision === CON_TECHO && String(tipo?.codtte) === instalado.codtte);
 export const estadoTechoMoto = (x) => (x?.instalado ? "instalado" : x?.estado === "En proceso" ? "configurado y en armado" : "configurado, por instalar");
-// Separación (HU-005 aceptada por el PO el 15/11): con un techo instalado se separa con ese techo o «Por definir».
-// La venta sí admite cualquier elección (HU-006): si el comprador ya quiere otro techo o ninguno, se concreta al vender.
-export const textoInstalado = (x) => `Esta moto tiene «${x?.nombre}» instalado. En la separación se registra con ese techo o con el techo «Por definir». Si el comprador ya piensa en otro techo o en la moto sin techo, déjalo «Por definir»: al registrar la venta podrá elegirlo y el cambio quedará pendiente en Preparación.`;
-export const errorTechoMoto = (x) => `Esta moto tiene «${x.nombre}» instalado: elige ese techo o «Por definir».`;
 // Techo configurado (sin instalar) distinto de lo que eligió el comprador: no impide registrar, pero queda a la vista
 // para corregir la configuración en la ficha. Devuelve el texto o "".
 export function diferenciaConfigurado(cfg, decision, tipo) {
@@ -295,8 +289,8 @@ export function diferenciaConfigurado(cfg, decision, tipo) {
 // techo) el comprador puede quedarse con el techo que la moto ya tiene, dejarlo por definir, pedir otro o ninguno,
 // aunque haya uno instalado. La venta guarda lo acordado y no cambia la moto: el trabajo físico queda pendiente y se
 // registra en Preparación (HU-033); la entrega (HU-032) exige que coincida. Se cobra un solo techo: el final.
-// La SEPARACIÓN conserva la regla aceptada de HU-005 (ese techo o «Por definir»).
-export const textoInstaladoVenta = (x) => `Esta moto tiene «${x?.nombre}» instalado. El comprador puede conservarlo, dejar el techo por definir o pedir otro techo o ninguno: la venta registra lo acordado y no cambia la moto. Si elige otra cosa, el cambio queda pendiente y se programa en Preparación antes de entregar.`;
+// Lo mismo en la separación (contrato de Michelle del 15/11, HU-005): la decisión comercial no depende del techo físico.
+export const textoInstaladoVenta = (x, que = "venta") => `Esta moto tiene «${x?.nombre}» instalado. El comprador puede conservarlo, dejar el techo por definir o pedir otro techo o ninguno: la ${que} registra lo acordado y no cambia la moto. Si elige otra cosa, el cambio queda pendiente y se programa en Preparación antes de entregar.`;
 // Techo físico (instalado o configurado) frente a lo que acordó el comprador: texto de la adecuación pendiente o "".
 // «Por definir» con un techo instalado deja pendiente la decisión (conservarlo o cambiarlo).
 export function adecuacionPendiente(fisico, decision, tipo) {
