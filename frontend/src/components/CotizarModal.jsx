@@ -9,14 +9,14 @@ import { COLORES, formatoSoles } from "../data/mockData";
 import { useTechos } from "../servicios/techos";
 import { registrarInteresadoWebApi } from "../lib/api";
 import { mensajeError } from "../lib/errores";
-import { soloDigitos, soloLetrasNombre, esNombreYApellido, esCelular, limpiarTexto, formatoTelefono, MSJ } from "../lib/validar";
-import { POLITICA_DATOS, SEGUNDOS_MINIMOS, TEXTO_CONSENTIMIENTO, anotarEnvio, limiteAlcanzado, registrarConsultaWeb } from "../servicios/consultas";
+import { limpiarTexto, formatoTelefono } from "../lib/validar";
+import { POLITICA_DATOS, VERSION_CONSENTIMIENTO, TEXTO_CONSENTIMIENTO, registrarConsultaWeb } from "../servicios/consultas";
+import { MAX_MENSAJE, erroresConsultaWeb, intentoConsulta, normalizarCelular, normalizarTexto } from "../servicios/consultaWeb";
 
 const Ctx = createContext(() => {});
 export const useCotizar = () => useContext(Ctx);
 
 const VACIO = { tipo: "cotizar", nombre: "", telefono: "", modelo: "", color: "", sede: "", techo: "", pago: "Financiamiento", mensaje: "", acepta: false, trampa: "" };
-const MAX_MENSAJE = 400;
 // Colores para elegir: los del modelo en la base; si el modelo todavía no tiene, todos los de la marca
 const coloresDe = (m) => (m?.colores?.length ? m.colores : m ? COLORES : []);
 const colorInicial = (m, pedido) => (m?.colores?.length ? (m.colores.includes(pedido) ? pedido : m.colores[0]) : COLORES.includes(pedido) ? pedido : "");
@@ -34,7 +34,7 @@ export function CotizarProvider({ children }) {
   const [verPolitica, setVerPolitica] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const enviando = useRef(false);
-  const abiertoEn = useRef(0);
+  const intento = useRef(null);
 
   // pre: { modeloId, color, techo, tipo: "consulta" }
   const abrir = useCallback((pre = {}) => {
@@ -42,7 +42,7 @@ export function CotizarProvider({ children }) {
     const m = publicos.find((x) => x.id === pre.modeloId) || (consulta ? null : publicos[0]);
     const color = colorInicial(m, pre.color);
     setF({ ...VACIO, tipo: consulta ? "consulta" : "cotizar", modelo: m?.id || "", color, techo: TECHOS.some((t) => t.id === pre.techo) ? pre.techo : "", sede: pre.sede && sedes.some((s) => s.nombre === pre.sede) ? pre.sede : sedes[0]?.nombre || "" });
-    setErr({}); setHecho(null); setVerPolitica(false); enviando.current = false; abiertoEn.current = Date.now(); setAbierto(true);
+    setErr({}); setHecho(null); setVerPolitica(false); enviando.current = false; intento.current = null; setAbierto(true);
   }, [publicos, sedes, TECHOS]);
 
   const consulta = f.tipo === "consulta";
@@ -53,9 +53,10 @@ export function CotizarProvider({ children }) {
   // Horario de la sede elegida (viene de la base); si no tiene, no se muestra
   const horarioSede = hecho ? sedes.find((s) => s.nombre === hecho.sede)?.horario || "" : "";
   const set = (k, v) => {
+    if (enviando.current) return;
     setF((p) => {
       const n = { ...p, [k]: v };
-      if (k === "modelo") n.color = colorInicial(publicos.find((x) => x.id === v), p.color);
+      if (k === "modelo") n.color = v ? colorInicial(publicos.find((x) => x.id === v), p.color) : "";
       return n;
     });
     setErr((x) => (x[k] || x.general ? { ...x, [k]: undefined, general: undefined } : x));
@@ -63,22 +64,9 @@ export function CotizarProvider({ children }) {
 
   // Validación
   function validar() {
-    const e = {};
-    if (!limpiarTexto(f.nombre)) e.nombre = "Escribe tu nombre y apellido.";
-    else if (!esNombreYApellido(f.nombre)) e.nombre = "Escribe tu nombre y apellido, solo con letras (sin números ni símbolos).";
-    if (!f.telefono) e.telefono = "Escribe tu celular.";
-    else if (!esCelular(f.telefono)) e.telefono = MSJ.celular;
-    if (!f.sede) e.sede = "Elige una sede.";
-    if (consulta) {
-      const t = limpiarTexto(f.mensaje);
-      if (t.length < 10 || (t.match(/\p{L}/gu) || []).length < 5) e.mensaje = "Escribe tu consulta (mínimo 10 caracteres).";
-      else if (t.length > MAX_MENSAJE) e.mensaje = `Máximo ${MAX_MENSAJE} caracteres.`;
-    } else {
-      if (!modelo) e.modelo = "Elige un modelo.";
-      if (!f.techo) e.techo = "Elige un techo o «Sin techo».";
-      if (limpiarTexto(f.mensaje).length > MAX_MENSAJE) e.mensaje = `Máximo ${MAX_MENSAJE} caracteres.`;
-    }
-    if (!f.acepta) e.acepta = "Para responderte necesitamos tu autorización.";
+    const e = erroresConsultaWeb(f);
+    if (f.modelo && !modelo) e.modelo = "Elige un modelo publicado.";
+    if (!sedes.some((s) => s.nombre === f.sede)) e.sede = "Elige una sede activa.";
     setErr(e);
     return Object.keys(e).length === 0;
   }
@@ -87,71 +75,63 @@ export function CotizarProvider({ children }) {
   async function enviar(e) {
     e.preventDefault();
     if (enviando.current || !validar()) return;
-    // Antispam: campo trampa, tiempo mínimo y límite de envíos por navegador
-    if (f.trampa) { setHecho({ codigo: "", repetido: false, url: "", modelo: modelo?.nombre || "", sede: f.sede }); return; }
-    if ((Date.now() - abiertoEn.current) / 1000 < SEGUNDOS_MINIMOS) { setErr({ general: "Revisa tus datos un momento y vuelve a enviar." }); return; }
-    if (limiteAlcanzado()) { setErr({ general: "Ya recibimos tus mensajes. Un asesor te contactará pronto; si es urgente, escríbenos por WhatsApp." }); return; }
+    if (f.trampa) { setErr({ general: "No se pudo enviar la consulta. Revisa el formulario." }); return; }
     enviando.current = true;
-    const nombre = limpiarTexto(f.nombre);
+    const nombre = normalizarTexto(f.nombre);
     const techoTxt = techo?.precio ? techo.nombre : "";
     let r = { codigo: "", repetido: false, guardado: false };
     if (MODO_REAL) {
-      const detalle = consulta
-        ? limpiarTexto(f.mensaje)
-        : [techoTxt ? `Techo ${techoTxt} (+${formatoSoles(techo.precio)})` : "Sin techo", f.pago, conPrecio ? `Total referencial ${formatoSoles(total)}` : "Precio por confirmar", limpiarTexto(f.mensaje)].filter(Boolean).join(" · ");
+      const contexto = consulta ? "" : [!techo ? "Techo por definir" : techoTxt ? `Techo ${techoTxt} (+${formatoSoles(techo.precio)})` : "Sin techo", f.pago, conPrecio ? `Total referencial ${formatoSoles(total)}` : "Precio por confirmar"].join(" · ");
+      const cuerpo = { nombre, telefono: normalizarCelular(f.telefono), codmod: modelo?.codmodApi || null, color: f.color || null, codsed: sedes.find((s) => s.nombre === f.sede)?.codsed, detalle: normalizarTexto(f.mensaje), tipo: consulta ? "Consulta general" : "Cotización", acepta: f.acepta, versionAviso: VERSION_CONSENTIMIENTO, contexto };
       setErr({}); setGuardando(true);
       try {
-        const g = await registrarInteresadoWebApi({ nombre, telefono: f.telefono, codmod: modelo?.codmodApi, color: f.color, codsed: sedes.find((s) => s.nombre === f.sede)?.codsed, detalle, tipo: consulta ? "Consulta" : "Cotización" });
-        r = { codigo: "", repetido: !!g?.repetido, guardado: true };
+        intento.current = intentoConsulta(intento.current, cuerpo);
+        const g = await registrarInteresadoWebApi({ ...cuerpo, idempotencia: intento.current.id });
+        if (!g?.codigo) throw new Error("El servidor no confirmó el registro. Vuelve a intentarlo con los mismos datos.");
+        r = { codigo: g.codigo, repetido: !!g.repetido, guardado: true };
       } catch (er) {
-        // Sin la función en Supabase la web sigue funcionando por WhatsApp; otro error se muestra para corregirlo
-        if (!er?.detalle?.faltaSql) { setErr({ general: mensajeError(er) }); setGuardando(false); enviando.current = false; return; }
+        setErr({ general: `${mensajeError(er)} Conservamos tus datos; puedes volver a enviar sin duplicar este intento.` }); setGuardando(false); enviando.current = false; return;
       }
       setGuardando(false);
     } else {
       // Vista de ejemplo: queda en este navegador con su número de consulta
-      r = registrarConsultaWeb(app, { tipo: f.tipo, nombre, telefono: f.telefono, sede: f.sede, modelo, color: f.color, techo, pago: f.pago, total: conPrecio ? total : 0, mensaje: f.mensaje });
+      r = registrarConsultaWeb(app, { tipo: f.tipo, nombre, telefono: normalizarCelular(f.telefono), sede: f.sede, modelo, color: f.color, techo, pago: f.pago, total: conPrecio ? total : 0, mensaje: f.mensaje, acepta: f.acepta });
     }
-    anotarEnvio();
+    enviando.current = false;
     const msg = consulta
       ? `Hola, soy ${nombre}. ${modelo ? `Consulto por el ${modelo.nombre}. ` : ""}${limpiarTexto(f.mensaje)} Sede ${f.sede}. Mi celular: ${f.telefono}.`
-      : `Hola, soy ${nombre}. Quisiera cotizar el ${modelo.nombre}${f.color ? ` en color ${f.color}` : ""}${techoTxt ? ` con techo ${techoTxt} (+${formatoSoles(techo.precio)})` : " sin techo"}, ${conPrecio ? `total referencial ${formatoSoles(total)}` : "precio por confirmar"} (${f.pago.toLowerCase()}). Sede ${f.sede}. Mi celular: ${f.telefono}.`;
+      : `Hola, soy ${nombre}. Quisiera cotizar el ${modelo.nombre}${f.color ? ` en color ${f.color}` : ""}${!techo ? ", techo por definir" : techoTxt ? ` con techo ${techoTxt} (+${formatoSoles(techo.precio)})` : " sin techo"}, ${conPrecio ? `total referencial ${formatoSoles(total)}` : "precio por confirmar"} (${f.pago.toLowerCase()}). Sede ${f.sede}. Mi celular: ${f.telefono}.`;
     setPausaClic(true); setTimeout(() => setPausaClic(false), 700);
     setHecho({ ...r, modelo: modelo?.nombre || "", sede: f.sede, url: `https://wa.me/${WHATSAPP_NUMERO}?text=${encodeURIComponent(r.codigo ? `${msg} (Consulta ${r.codigo})` : msg)}` });
   }
 
   const valor = useMemo(() => abrir, [abrir]);
-  const titulo = hecho ? (MODO_REAL && !hecho.guardado ? "¡Tu mensaje está listo!" : consulta ? "¡Consulta enviada!" : "¡Solicitud recibida!") : consulta ? "Envíanos tu consulta" : "Cotizar mi Torito";
-  const soloWhatsapp = MODO_REAL && !hecho?.guardado;
+  const titulo = hecho ? (!MODO_REAL ? "Consulta de demostración" : consulta ? "¡Consulta enviada!" : "¡Solicitud recibida!") : consulta ? "Envíanos tu consulta" : "Cotizar mi Torito";
   return (
     <Ctx.Provider value={valor}>
       {children}
-      <Modal abierto={abierto} onClose={() => { if (!pausaClic) setAbierto(false); }} sinAvisoCambios={!!hecho || !publicos.length} titulo={titulo} ancho="max-w-2xl" confirmarGuardar={false}>
+      <Modal abierto={abierto} onClose={() => { if (!pausaClic && !enviando.current) setAbierto(false); }} sinAvisoCambios={!!hecho || !publicos.length} titulo={titulo} ancho="max-w-2xl" confirmarGuardar={false}>
         {/* Sin catálogo / confirmación / formulario */}
         {!hecho && !consulta && !publicos.length ? (
           <div className="space-y-4 text-center" data-cotizar-vacio>
             <p className="text-[15px] text-slate-600 dark:text-slate-300">Estamos actualizando nuestro catálogo. Escríbenos por WhatsApp y un asesor te cotiza al momento.</p>
             <a href={`https://wa.me/${WHATSAPP_NUMERO}?text=${encodeURIComponent("Hola, quisiera cotizar un Torito.")}`} target="_blank" rel="noopener noreferrer" className="btn btn-whatsapp w-full"><IconWhatsapp /> Cotizar por WhatsApp</a>
+            <button className="btn btn-secondary w-full" onClick={() => setF((p) => ({ ...p, tipo: "consulta", modelo: "", color: "" }))}>Enviar una consulta general</button>
             <button className="btn btn-secondary w-full" onClick={() => setAbierto(false)}>Cerrar</button>
           </div>
         ) : hecho ? (
           <div className={`space-y-5 ${pausaClic ? "pointer-events-none" : ""}`} data-consulta-enviada>
             <div className="text-center">
               <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-emerald-100 text-2xl text-emerald-600">✓</div>
-              <p className="mt-3 text-[15px] text-slate-600 dark:text-slate-300">{soloWhatsapp ? <>Armamos tu {consulta ? "consulta" : "solicitud"}{hecho.modelo ? <> por el <strong>{hecho.modelo}</strong></> : ""}. Envíala por WhatsApp y un asesor de la sede {hecho.sede} te responde.</> : <>{hecho.repetido ? "Ya teníamos tus datos: sumamos este mensaje a tu consulta" : consulta ? "Recibimos tu consulta" : "Registramos tu solicitud"}{hecho.modelo ? <> por el <strong>{hecho.modelo}</strong></> : ""}.</>}</p>
-              {hecho.codigo && <p className="mt-2 text-[13.5px] text-slate-500">Número de consulta <b className="cifra font-mono text-[15px] text-marino dark:text-white" data-codigo-consulta>{hecho.codigo}</b></p>}
+              <p className="mt-3 text-[15px] text-slate-600 dark:text-slate-300">{!MODO_REAL ? "Modo de demostración: guardado solo en este navegador, no enviado a EPSA." : <>{hecho.repetido ? "Este envío ya estaba registrado; no se duplicó" : consulta ? "Recibimos tu consulta" : "Registramos tu solicitud"}{hecho.modelo ? <> por el <strong>{hecho.modelo}</strong></> : ""}.</>}</p>
+              {hecho.codigo && <p className="mt-2 text-[13.5px] text-slate-500">Número de consulta <b className="cifra break-all font-mono text-[15px] text-marino dark:text-white" data-codigo-consulta>{hecho.codigo}</b></p>}
             </div>
-            <ol className="space-y-2 rounded-xl2 bg-marino-50 p-4 text-[14px] text-slate-600 dark:bg-white/5 dark:text-slate-300">
-              {soloWhatsapp ? <>
-                <li><b className="text-marino dark:text-white">1.</b> Toca «Enviar por WhatsApp»: el mensaje ya lleva tus datos y lo que elegiste.</li>
-                <li><b className="text-marino dark:text-white">2.</b> Un asesor de la sede {hecho.sede} te responde en su horario de atención{horarioSede ? ` (${horarioSede})` : ""}.</li>
-              </> : <>
+            {MODO_REAL && <ol className="space-y-2 rounded-xl2 bg-marino-50 p-4 text-[14px] text-slate-600 dark:bg-white/5 dark:text-slate-300">
                 <li><b className="text-marino dark:text-white">1.</b> Un asesor de la sede {hecho.sede} revisa tu {consulta ? "consulta" : "solicitud"}.</li>
-                <li><b className="text-marino dark:text-white">2.</b> Te llamamos o escribimos al {formatoTelefono(f.telefono)} en horario de atención{horarioSede ? ` (${horarioSede})` : ""}.</li>
+                <li><b className="text-marino dark:text-white">2.</b> Te llamamos o escribimos al {formatoTelefono(normalizarCelular(f.telefono))} en horario de atención{horarioSede ? ` (${horarioSede})` : ""}.</li>
                 <li><b className="text-marino dark:text-white">3.</b> Si prefieres, adelanta la conversación por WhatsApp.</li>
-              </>}
-            </ol>
-            {hecho.url && <a href={hecho.url} target="_blank" rel="noopener noreferrer" className="btn btn-whatsapp w-full"><IconWhatsapp /> {soloWhatsapp ? "Enviar por WhatsApp" : "Continuar por WhatsApp"}</a>}
+            </ol>}
+            {MODO_REAL && hecho.url && <a href={hecho.url} target="_blank" rel="noopener noreferrer" className="btn btn-whatsapp w-full"><IconWhatsapp /> Continuar por WhatsApp</a>}
             <button className="btn btn-secondary w-full" onClick={() => setAbierto(false)}>Cerrar</button>
           </div>
         ) : (
@@ -159,7 +139,7 @@ export function CotizarProvider({ children }) {
             {/* Cotizar o preguntar */}
             <div className="inline-flex w-full rounded-xl bg-slate-100 p-1 sm:col-span-2 dark:bg-white/5" role="tablist" aria-label="Tipo de mensaje">
               {[["cotizar", "Quiero una cotización"], ["consulta", "Tengo una pregunta"]].map(([t, l]) => (
-                <button key={t} type="button" role="tab" aria-selected={f.tipo === t} onClick={() => { setErr({}); setF((p) => ({ ...p, tipo: t, modelo: t === "cotizar" && !p.modelo ? publicos[0]?.id || "" : p.modelo, color: t === "cotizar" && !p.modelo ? colorInicial(publicos[0], p.color) : p.color })); }}
+                <button key={t} disabled={guardando} type="button" role="tab" aria-selected={f.tipo === t} onClick={() => { setErr({}); setF((p) => ({ ...p, tipo: t, modelo: t === "cotizar" && !p.modelo ? publicos[0]?.id || "" : p.modelo, color: t === "cotizar" && !p.modelo ? colorInicial(publicos[0], p.color) : p.color })); }}
                   className={`flex-1 rounded-lg px-3 py-2 text-[13.5px] font-semibold transition ${f.tipo === t ? "bg-white text-marino shadow-sm dark:bg-white/15 dark:text-white" : "text-slate-500"}`}>{l}</button>
               ))}
             </div>
@@ -175,10 +155,10 @@ export function CotizarProvider({ children }) {
             )}
             {/* Datos del cliente */}
             <Campo etiqueta="Nombre completo" error={err.nombre} className="sm:col-span-2">
-              <input id="cot-nombre" className="field-input" value={f.nombre} maxLength={80} onChange={(e) => set("nombre", soloLetrasNombre(e.target.value, 80))} autoComplete="name" />
+              <input id="cot-nombre" className="field-input" value={f.nombre} maxLength={320} onChange={(e) => set("nombre", e.target.value)} autoComplete="name" />
             </Campo>
             <Campo etiqueta="Celular" error={err.telefono}>
-              <input id="cot-celular" className="field-input" type="tel" inputMode="numeric" pattern="9[0-9]{8}" maxLength={9} value={f.telefono} onChange={(e) => set("telefono", soloDigitos(e.target.value, 9))} placeholder="9XXXXXXXX" autoComplete="tel" />
+              <input id="cot-celular" className="field-input" type="tel" maxLength={30} value={f.telefono} onChange={(e) => set("telefono", e.target.value)} placeholder="987654321 o +51 987 654 321" autoComplete="tel" />
             </Campo>
             <Campo etiqueta="Sede de atención" error={err.sede}>
               <select className="field-input" value={f.sede} onChange={(e) => set("sede", e.target.value)}>
@@ -200,8 +180,9 @@ export function CotizarProvider({ children }) {
             </Campo>
             {!consulta && <>
               <fieldset className="sm:col-span-2">
-                <legend className="field-label">Techo <span className="font-normal text-slate-500">(adicional referencial: se suma al precio de la moto)</span></legend>
+                <legend className="field-label">Techo (opcional) <span className="font-normal text-slate-500">(adicional referencial: se suma al precio de la moto)</span></legend>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Techo">
+                  <button type="button" role="radio" aria-checked={!f.techo} onClick={() => set("techo", "")} className={`rounded-xl border px-3 py-2 text-left ${!f.techo ? "border-marino-700 bg-marino-50 dark:bg-white/10" : "border-slate-200 dark:border-white/15"}`}><span className="block text-[13px] font-semibold">Por definir</span><span className="text-[12px] text-slate-500">Lo decidiré después</span></button>
                   {TECHOS.map((t) => (
                     <button key={t.id} type="button" role="radio" aria-checked={f.techo === t.id} onClick={() => set("techo", t.id)}
                       className={`rounded-xl border px-3 py-2 text-left transition ${f.techo === t.id ? "border-marino-700 bg-marino-50 ring-1 ring-marino-700 dark:border-white/60 dark:bg-white/10 dark:ring-white/60" : "border-slate-200 hover:border-slate-300 dark:border-white/15"}`}>
@@ -223,8 +204,8 @@ export function CotizarProvider({ children }) {
                 <div className="flex justify-between border-t border-slate-200 pt-1 text-[15px] font-bold text-marino dark:border-white/10 dark:text-white"><dt>Total referencial</dt><dd className="cifra">{conPrecio ? formatoSoles(total) : "A consultar"}</dd></div>
               </dl>
             </>}
-            <Campo etiqueta={consulta ? "Tu consulta" : "¿Algo más que quieras contarnos? (opcional)"} error={err.mensaje} className="sm:col-span-2" ayuda={`${limpiarTexto(f.mensaje).length}/${MAX_MENSAJE}`}>
-              <textarea id="cot-mensaje" rows={consulta ? 4 : 2} maxLength={MAX_MENSAJE + 20} className="field-input" value={f.mensaje} onChange={(e) => set("mensaje", e.target.value)} placeholder={consulta ? "Ej: ¿Puedo financiar con 20% de inicial si soy independiente?" : "Ej: me interesa para trabajar como mototaxi"} />
+            <Campo etiqueta={consulta ? "Tu consulta" : "¿Algo más que quieras contarnos? (opcional)"} error={err.mensaje} className="sm:col-span-2" ayuda={`${[...normalizarTexto(f.mensaje)].length}/${MAX_MENSAJE}`}>
+              <textarea id="cot-mensaje" rows={consulta ? 4 : 2} maxLength={MAX_MENSAJE * 2 + 20} className="field-input" value={f.mensaje} onChange={(e) => set("mensaje", e.target.value)} placeholder={consulta ? "Ej: ¿Puedo financiar con 20% de inicial si soy independiente?" : "Ej: me interesa para trabajar como mototaxi"} />
             </Campo>
             {/* Campo trampa para robots: las personas no lo ven */}
             <div aria-hidden="true" className="absolute -left-[9999px] h-px w-px overflow-hidden">

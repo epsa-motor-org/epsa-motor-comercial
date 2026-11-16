@@ -24,6 +24,8 @@ BEGIN;
 -- ---------------------------------------------------------------------
 -- 1. Interesado que llega desde la web (visitante sin sesión)
 -- ---------------------------------------------------------------------
+-- LEGADO: HU-011 se sustituye por supabase/migrations/20261116063202_hu011_consultas_web.sql.
+-- No reaplicar este bloque ni su GRANT después de la migración nueva.
 CREATE OR REPLACE FUNCTION public.web_registrar_interesado(
   p_nombre text,
   p_telefono text,

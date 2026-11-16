@@ -28,6 +28,7 @@ export default function LeadsCentral({ token = 0, recientes = [] }) {
   const [offset, setOffset] = useState(0);
   const [asignar, setAsignar] = useState(null);
   const [historial, setHistorial] = useState(null);
+  const [detalleWeb, setDetalleWeb] = useState(null);
   // Última actualización de cada interesado (se guarda en la base con cada cambio)
   const { porLead, consulta: actualizaciones } = useActualizaciones();
   useEffect(() => { const t = setTimeout(() => setBuscar(limpio(texto).slice(0, 100).toLowerCase()), 250); return () => clearTimeout(t); }, [texto]);
@@ -85,7 +86,7 @@ export default function LeadsCentral({ token = 0, recientes = [] }) {
             {leads.map((l) => (
               <tr key={l.codlea} className="align-top" data-lead={l.codlea}>
                 <td className="whitespace-nowrap px-4 py-3 text-slate-500">{fechaCompleta(l.fecreglea)}<span className="block text-[12px] text-slate-400">N° {l.codlea}</span></td>
-                <td className="px-4 py-3"><p className="font-semibold text-marino dark:text-white">{l.nomlea}</p><p className="text-[12.5px] text-slate-400">{l.tellea || "Sin celular"}{l.sede ? ` · ${l.sede.nomsed}` : ""}</p></td>
+                <td className="px-4 py-3"><p className="font-semibold text-marino dark:text-white">{l.nomlea}</p><p className="text-[12.5px] text-slate-400">{l.tellea || "Sin celular"}{l.sede ? ` · ${l.sede.nomsed}` : ""}</p>{l.orilea === "Web" && l.obslea && <button type="button" className="mt-1 text-left text-[12.5px] font-semibold text-marino dark:text-white" data-consulta-web onClick={() => setDetalleWeb(l)}>Ver consulta web</button>}</td>
                 <td className="px-4 py-3">{l.modelo?.nommod || <span className="text-slate-400">Sin modelo</span>}{l.collea && <span className="block text-[12px] text-slate-400">{capital(l.collea)}</span>}</td>
                 <td className="px-4 py-3">{l.canlea}{l.whatsapp && <span className="block text-[12px] text-slate-400">Recibido en {l.whatsapp.numcwa}</span>}{l.orilea && <span className="block text-[12px] text-slate-400">Origen: {l.orilea}</span>}</td>
                 <td className="px-4 py-3" data-responsable={l.responsable?.codusu || ""}>{l.responsable ? <><span className="font-semibold text-marino dark:text-white">{l.responsable.nombre}</span>{!l.responsable.activo && <span className="block text-[12px] font-semibold text-acento">Sin acceso activo</span>}{l.asignado_desde && <span className="block text-[12px] text-slate-400">Desde {fechaCompleta(l.asignado_desde)}</span>}</> : <Pill tono="ambar">Sin responsable</Pill>}</td>
@@ -105,6 +106,9 @@ export default function LeadsCentral({ token = 0, recientes = [] }) {
       <p className="mt-3 text-[12.5px] text-slate-400">Asignar no marca al interesado como atendido ni cambia su etapa; no se envían mensajes automáticos.</p>
 
       </>}
+      <Modal abierto={!!detalleWeb} onClose={() => setDetalleWeb(null)} titulo="Consulta recibida desde la web">
+        {detalleWeb && <div data-detalle-consulta-web className="space-y-3 text-[14px]"><p className="font-semibold">{detalleWeb.nomlea}</p><p className="text-slate-500">{detalleWeb.tellea} · {detalleWeb.sede?.nomsed || "Sin sede"}</p><p className="whitespace-pre-wrap break-words">{detalleWeb.obslea}</p></div>}
+      </Modal>
       <ModalAsignar lead={asignar} responsables={responsables} abiertosDe={abiertosDe} onClose={() => setAsignar(null)} onHecho={() => { consulta.refrescar(true); actualizaciones.refrescar(true); }} />
       <ModalHistorialLead lead={historial} onClose={() => setHistorial(null)} />
     </div>
