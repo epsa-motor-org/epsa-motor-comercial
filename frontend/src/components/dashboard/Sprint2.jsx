@@ -2,6 +2,7 @@
 import { COLOR_HEX } from "../../data/mockData";
 import { CONECTADO } from "../../lib/sprint2";
 import { IconCheck } from "../Icons";
+import { formatoDia } from "../../lib/validar";
 
 // ¿Esta pantalla trabaja con los datos compartidos del equipo? (el código de la HU queda solo en data-hu)
 // Si la sección todavía no está disponible en el servidor, no se muestra (ya lo explica el aviso de la página).
@@ -63,8 +64,7 @@ export function Pestanas({ opciones, valor, onCambio, etiqueta = "Vista" }) {
 // Fecha corta: "12 oct"
 export function fechaCorta(f) {
   if (!f) return "";
-  const d = new Date(String(f).length > 10 ? f : `${f}T12:00:00`);
-  return d.toLocaleDateString("es-PE", { day: "numeric", month: "short" }).replace(".", "");
+  return formatoDia(f, { day: "numeric", month: "short" }).replace(".", "");
 }
 
 // Recorrido de la moto: de la compra a la venta

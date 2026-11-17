@@ -11,6 +11,7 @@
 // se registra su referencia y fecha reales cuando existen.
 import { pedir, urlFirmadaStorage } from "../lib/api";
 import * as S from "./separacionCentral";
+import { diaLima } from "../lib/validar";
 
 export const BUCKET_VENTAS = "ventas-evidencia";
 
@@ -244,8 +245,8 @@ export function partirObservacion(obs) {
 }
 
 // Fecha (YYYY-MM-DD) de un valor de la base que puede venir con hora (la fecha de la venta se guarda como el día
-// indicado a medianoche: se toma tal cual)
-export const soloFecha = (v) => String(v || "").slice(0, 10);
+// indicado a medianoche UTC: se toma tal cual; un instante con hora se pasa a su día en Lima)
+export const soloFecha = (v) => diaLima(v);
 // Día en Lima de un instante (por ejemplo, cuándo se registró la separación)
 export function fechaLima(iso) {
   if (!iso) return "";
@@ -253,6 +254,9 @@ export function fechaLima(iso) {
   if (Number.isNaN(d.getTime())) return soloFecha(iso);
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 }
+
+// Otra persona registró antes la venta de la misma moto (texto de Harold, QA 16/11)
+export const OTRA_VENTA = "Otra persona acaba de vender esta moto. No se registró tu venta. Revisa la ficha y actualiza la disponibilidad.";
 
 // Mensaje claro para los errores de la venta
 // PO 15/11: la pantalla ya permite otro techo en una moto con techo instalado y cambiar al vender la elección de la

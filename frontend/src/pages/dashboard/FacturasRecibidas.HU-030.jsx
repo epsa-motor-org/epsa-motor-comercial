@@ -10,6 +10,7 @@ import { MODO_REAL } from "../../lib/config";
 import { codigosCroslandApi, correosRecibidosApi, desactivarCodigoCroslandApi, documentosRecibidosApi, guardarCodigoCroslandApi, modelosAdminApi, recepcionesConErrorApi } from "../../lib/api";
 import { mensajeError } from "../../lib/errores";
 import { useConsultaCentral } from "../../servicios/central";
+import { formatoDia } from "../../lib/validar";
 import { ESTADO_DOCUMENTO, TONO_DOCUMENTO, leerFactura, prepararFactura, registrarFactura, textoCodigo } from "../../servicios/facturas";
 import { Aviso, Campo, Card, Modal, PageHeader, Stat, Tabla, Vacio, btnMini, useConfirm, useToast } from "../../components/ui";
 import { Pestanas, Pill } from "../../components/dashboard/Sprint2";
@@ -20,7 +21,7 @@ export { TONO_DOCUMENTO };
 const soles = (n) => (n == null || n === "" ? "—" : `S/ ${Number(n).toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 // Avisos para la persona (la diferencia de codificación del XML de Crosland es normal y no se muestra)
 const avisos = (lista = []) => lista.filter((c) => c !== "ENCODING_DECLARADO_NO_COINCIDE").map(textoCodigo).join(" ");
-const fecha = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString("es-PE", { day: "numeric", month: "short", year: "numeric" }).replace(".", "") : "—");
+const fecha = (d) => (d ? formatoDia(d, { day: "numeric", month: "short", year: "numeric" }).replace(".", "") || "—" : "—");
 
 export default function FacturasRecibidas() {
   const [params, setParams] = useSearchParams();

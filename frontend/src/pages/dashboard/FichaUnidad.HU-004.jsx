@@ -12,7 +12,7 @@ import { Aviso, Campo, Card, PageHeader, useConfirm, useToast } from "../../comp
 import { useMovimientos } from "../../servicios/movimientos";
 import { nombreTecho, usePreparacion } from "../../servicios/preparacion";
 import { recorridoDe } from "../../servicios/recorrido";
-import { fechaHora, haceCuanto } from "../../lib/validar";
+import { fechaHora, haceCuanto, hoyLocal } from "../../lib/validar";
 import { PasosPreparacion, Pill, Recorrido, TONO_MOVIMIENTO, fechaCorta } from "../../components/dashboard/Sprint2";
 import { ModalLlegada, ModalRecibir, ModalTraslado } from "../../components/dashboard/MovimientoModales";
 import PreparacionModal from "../../components/dashboard/PreparacionModal";
@@ -26,7 +26,7 @@ const DESCRIPCION_TECHO = {
 };
 const limpiar = (t) => String(t || "").trim().replace(/\s+/g, " ");
 const DISP = { "No disponible": "bg-slate-100 text-slate-600 dark:bg-white/10 dark:text-white/70", Disponible: "bg-emerald-100 text-emerald-700", Separada: "bg-amber-100 text-amber-700", Vendida: "bg-slate-200 text-slate-600" };
-const hoy = () => new Date().toLocaleDateString("en-CA");
+const hoy = hoyLocal;
 
 // Dibujo del techo
 function SiluetaTecho({ tipo }) {

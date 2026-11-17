@@ -21,7 +21,7 @@ export const numeroSeparacion = (s) => `SEP-${String(s.id).padStart(4, "0")}`;
 // Razón social: letras, números y los signos de una empresa (S.A.C., & , -)
 const esRazonSocial = (v) => { const t = limpiarTexto(v); return t.length >= 3 && t.length <= 100 && /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9&.,' -]+$/.test(t) && (t.match(/\p{L}/gu) || []).length >= 3; };
 export const limpiarOperacion = (t) => String(t || "").replace(/[^\w-]/g, "").toUpperCase().slice(0, 20);
-export const venceDe = (fechaPago) => sumarDias(DIAS_SEPARACION, new Date(`${fechaPago}T12:00:00`));
+export const venceDe = (fechaPago) => sumarDias(DIAS_SEPARACION, fechaPago);
 
 // Estado que ve el usuario (una activa puede estar por vencer o ya vencida)
 export function estadoVisible(s, hoy = hoyLocal()) {
@@ -172,7 +172,7 @@ export function useSeparaciones() {
     if (limpiarTexto(motivo).length > 200) return "Máximo 200 caracteres.";
     return "";
   }
-  const nuevoVence = (s) => sumarDias(DIAS_SEPARACION, new Date(`${s.vence < hoy ? hoy : s.vence}T12:00:00`));
+  const nuevoVence = (s) => sumarDias(DIAS_SEPARACION, s.vence < hoy ? hoy : s.vence);
   function extender(s, motivo) {
     const vence = nuevoVence(s);
     actualizar("separaciones", s.id, { vence, extensiones: (s.extensiones || 0) + 1, prorrogas: [...(s.prorrogas || []), { fecha: new Date().toISOString(), antes: s.vence, vence, motivo: limpiarTexto(motivo), usuario: user.nombre }] }, `Separación ${numeroSeparacion(s)} extendida al ${vence}`);

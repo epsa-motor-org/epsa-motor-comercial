@@ -7,6 +7,8 @@
 // La entrega no cambia la venta, los pagos, la ubicación, el techo ni la preparación de la moto.
 import { pedir } from "../lib/api";
 import * as S from "./separacionCentral";
+import * as V from "./ventaCentral";
+import { VENTA, cancelacionDeApi } from "./cancelacionCentral";
 
 export const entregaDeVentaApi = (codven) => pedir(`/api/ventas/${codven}/entrega`).then((r) => r.data ?? null);
 // 201 nueva; 200 si era el mismo envío y ya estaba registrada
@@ -31,6 +33,42 @@ export function permisoEntrega(user, venta) {
   if (r?.codusu && String(r.codusu) === String(user?.codusu ?? "")) return { puede: true, texto: "" };
   return { puede: false, texto: `La registra su responsable${r?.nombre ? ` (${r.nombre})` : ""}, el gerente o la administradora.` };
 }
+
+// Quién puede consultar la entrega: gerente, administradora y el vendedor responsable vigente. Al vendedor que no es
+// el responsable el servidor se la niega; no se consulta, para no mostrarle un error (QA 16/11, EMT-159: le salía
+// «error interno»).
+export function puedeVerEntrega(user, venta) {
+  const rol = String(user?.rol || "").toLowerCase();
+  if (rol === "gerente" || rol === "administradora") return true;
+  if (rol !== "vendedor") return false;
+  const r = venta?.responsable;
+  return Boolean(r?.codusu && String(r.codusu) === String(user?.codusu ?? ""));
+}
+
+// HU-021 con HU-032 (regla del PO del 16/11): si se cancela una venta ya entregada, la entrega se conserva y la moto
+// sigue «Vendida», bloqueada hasta que el gerente registre su retorno real; con el retorno registrado vuelve a
+// ofrecerse. La moto ya no tiene venta vigente, así que la ficha busca su venta cancelada (Ventas a clientes, por
+// motor o chasis) y la entrega de esa venta para mostrar el motivo real del bloqueo (QA 16/11, EMT-157).
+// Devuelve { venta, entrega, cancelacion, restringida } o { venta: null } si no encuentra una venta cancelada.
+export async function ventaCanceladaEntregadaApi(unidad, user) {
+  const q = S.limpio(unidad?.nummotuni || unidad?.chauni || "");
+  if (!q || !unidad?.coduni) return { venta: null };
+  const r = await V.ventasApi({ q, limite: 20 });
+  const canceladas = (r.items || [])
+    .filter((v) => String(v.unidad?.coduni ?? "") === String(unidad.coduni) && v.estado === "Cancelada")
+    .sort((a, b) => Number(b.codven) - Number(a.codven));
+  if (!canceladas.length) return { venta: null };
+  const visibles = canceladas.filter((v) => puedeVerEntrega(user, v)).slice(0, 5);
+  for (const v of visibles) {
+    const e = await entregaDeVentaApi(v.codven);
+    if (e?.estado === ENTREGADA && e.entrega) {
+      const cancelacion = await cancelacionDeApi(VENTA, v.codven).catch(() => null);
+      return { venta: v, entrega: e, cancelacion };
+    }
+  }
+  return { venta: canceladas[0], entrega: null, cancelacion: null, restringida: !visibles.length };
+}
+export const BLOQUEO_RETORNO = "La venta se canceló después de entregar la moto: la entrega se conserva y la moto queda bloqueada hasta que el gerente registre su retorno. Con el retorno registrado, vuelve a ofrecerse.";
 
 export const MAX_RECEPTOR = 200;
 export const MAX_OBSERVACION = 1000;

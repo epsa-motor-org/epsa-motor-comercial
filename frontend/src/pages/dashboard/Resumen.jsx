@@ -14,13 +14,14 @@ import { MODO_REAL } from "../../lib/config";
 import * as api from "../../lib/api";
 import { inventarioApi, leadsCentralApi, useConsultaCentral } from "../../servicios/central";
 import { BarraActualizacion, sinApi } from "../../components/dashboard/Central";
+import { ZONA_LIMA, formatoDia, hoyLocal, mesLocal } from "../../lib/validar";
 
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 function ultimosMeses(n) {
-  const h = new Date();
+  const [y, m] = mesLocal().split("-").map(Number);
   return Array.from({ length: n }, (_, i) => {
-    const d = new Date(h.getFullYear(), h.getMonth() - (n - 1 - i), 1);
-    return { clave: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, etiqueta: MESES[d.getMonth()] };
+    const d = new Date(Date.UTC(y, m - 1 - (n - 1 - i), 1));
+    return { clave: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`, etiqueta: MESES[d.getUTCMonth()] };
   });
 }
 
@@ -35,7 +36,7 @@ function Bienvenida({ children }) {
       <MotoIllustration className="pointer-events-none absolute -bottom-5 right-8 hidden h-40 w-auto text-white/[0.12] md:block" />
       <div className="relative flex flex-wrap items-end justify-between gap-5">
         <div>
-          <p className="text-[13.5px] text-white/60 first-letter:uppercase">{new Date().toLocaleDateString("es-PE", { weekday: "long", day: "numeric", month: "long" })}</p>
+          <p className="text-[13.5px] text-white/60 first-letter:uppercase">{formatoDia(hoyLocal(), { weekday: "long", day: "numeric", month: "long" })}</p>
           <h1 className="mt-1 font-display text-[2.4rem] font-bold leading-none tracking-tight sm:text-[2.8rem]">{`Hola, ${String(user.nombre).split(" ")[0]}`}</h1>
           <p className="mt-2 max-w-xl text-[14.5px] text-white/70">Resumen operativo de EPSA Motor.</p>
         </div>
@@ -78,7 +79,7 @@ function ResumenEjemplo() {
   const adelantos = cerradas.reduce((s, v) => s + v.adelanto, 0);
   const ganados = L.filter((l) => l.estado === "Cerrado ganado").length;
   const conv = L.length ? Math.round((ganados / L.length) * 100) : 0;
-  const hoy = new Date().toLocaleDateString("en-CA");
+  const hoy = hoyLocal();
   const pendSeg = seguimientos.filter((s) => !s.hecho);
   const vencidos = pendSeg.filter((s) => s.fecha < hoy).length;
   const disp = U.filter((u) => u.disponibilidad === "Disponible").length;
@@ -97,7 +98,7 @@ function ResumenEjemplo() {
   const consultados = cuenta(L, (l) => l.modelo).map((d) => ({ ...d, etiqueta: nombreModelo(d.id) })).slice(0, 6);
   const inventarioPorUbic = cuenta(unidades, (u) => u.ubicacion || "Sin recepción");
 
-  const mesActual = new Date().toLocaleDateString("en-CA").slice(0, 7);
+  const mesActual = mesLocal();
   const lista = [
     ["Hay sedes activas", ubicaciones.some((u) => u.tipo === "Sede propia" && u.activo), "/admin/ubicaciones"],
     ["Hay modelos publicados", modelos.some((m) => m.estado === "Publicado"), "/admin/modelos"],
@@ -218,7 +219,7 @@ function ResumenEjemplo() {
           <h2 className="mb-3 font-bold text-marino dark:text-white">Actividad reciente</h2>
           {actividad.length === 0 ? <p className="text-[13.5px] text-slate-400">Aún no hay movimientos. Lo que hagas en el panel (publicar un modelo, registrar un lead, editar una sede…) aparecerá aquí.</p> : (
             <ul className="divide-y divide-slate-100 text-[13.5px] dark:divide-white/10">
-              {actividad.slice(0, 8).map((a) => <li key={a.id} className="flex flex-wrap justify-between gap-2 py-2"><span>{a.detalle}</span><span className="text-slate-400">{new Date(a.fecha).toLocaleString("es-PE", { dateStyle: "short", timeStyle: "short" })} · {a.quien}</span></li>)}
+              {actividad.slice(0, 8).map((a) => <li key={a.id} className="flex flex-wrap justify-between gap-2 py-2"><span>{a.detalle}</span><span className="text-slate-400">{new Date(a.fecha).toLocaleString("es-PE", { dateStyle: "short", timeStyle: "short", timeZone: ZONA_LIMA })} · {a.quien}</span></li>)}
             </ul>
           )}
         </Card>

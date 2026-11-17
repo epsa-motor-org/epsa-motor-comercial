@@ -8,12 +8,12 @@ import { useCallback, useMemo } from "react";
 import { useApp } from "../store/appStore.jsx";
 import { useAuth } from "../context/AuthContext";
 import { ORIGEN_RECEPCION } from "../data/mockData";
-import { hoyLocal, limpiarTexto } from "../lib/validar";
+import { fechaLocal, hoyLocal, limpiarTexto } from "../lib/validar";
 import { siguienteId } from "../lib/sprint2";
 
 const MAX_TEXTO = 200;
 const ahoraISO = () => new Date().toISOString();
-const fechaDe = (iso) => new Date(iso).toLocaleDateString("en-CA");
+const fechaDe = (iso) => fechaLocal(iso);
 
 export function useMovimientos() {
   const { movimientos = [], unidades = [], ubicaciones = [], historialPreparacion = [], agregar, actualizar } = useApp();

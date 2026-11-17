@@ -11,7 +11,7 @@ import { Aviso, Campo, Card, PageHeader, useConfirm, useToast } from "../../comp
 import ModeloImg from "../../components/ModeloImg";
 import { ESTADO_COMPRA } from "./Compras.HU-034";
 import { COLOR_HEX } from "../../data/mockData";
-import { fechaLocal, soloDigitos } from "../../lib/validar";
+import { fechaLocal, horaLima, soloDigitos } from "../../lib/validar";
 import { emparejarModelos } from "../../lib/modelos";
 import useAutoRefresco from "../../hooks/useAutoRefresco";
 import { REFRESCO_MS } from "../../servicios/central";
@@ -80,7 +80,7 @@ export default function RegistrarCompra() {
     }
     const ahora = new Date();
     const codcom = String(locales.reduce((a, c) => Math.max(a, Number(c.codcom)), 0) + 1);
-    agregar("compras", { id: Date.now(), codcom, codmod: cuerpo.codmod, nommod: modelo.nombre, colcom: cuerpo.colcom, cancom: cuerpo.cancom, cantidad_pendiente: cuerpo.cancom, estcom: "Pendiente de factura", feccom: fechaLocal(ahora), horcom: ahora.toTimeString().slice(0, 5), codusu: user.nombre, idem: clave.current, factura: null, unidades: [] }, `Compra registrada: ${modelo.nombre} ${cuerpo.colcom} x${cuerpo.cancom}`);
+    agregar("compras", { id: Date.now(), codcom, codmod: cuerpo.codmod, nommod: modelo.nombre, colcom: cuerpo.colcom, cancom: cuerpo.cancom, cantidad_pendiente: cuerpo.cancom, estcom: "Pendiente de factura", feccom: fechaLocal(ahora), horcom: horaLima(ahora), codusu: user.nombre, idem: clave.current, factura: null, unidades: [] }, `Compra registrada: ${modelo.nombre} ${cuerpo.colcom} x${cuerpo.cancom}`);
     return { status: 201, data: { codcom } };
   }
 
