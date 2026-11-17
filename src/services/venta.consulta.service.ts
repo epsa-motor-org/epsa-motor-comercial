@@ -12,7 +12,7 @@ export interface VentaDeUnidad extends Omit<CrearVentaResultado, 'reutilizada'> 
 }
 
 export async function ventaDeUnidad(db: SupabaseClient, coduni: string): Promise<VentaDeUnidad | null> {
-  const { data, error } = await db.rpc('hu006_venta_de_unidad', { p_coduni: coduni });
+  const { data, error } = await db.rpc('hu006_venta_de_unidad_http', { p_coduni: coduni });
   if (error) throw error;
   return (data ?? null) as VentaDeUnidad | null;
 }

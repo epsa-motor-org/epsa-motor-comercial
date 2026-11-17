@@ -59,7 +59,7 @@ async function entorno(
       llamadas.push({ nombre, parametros: args, token });
       const respuesta = resolver?.(nombre, args, token);
       if (respuesta) return respuesta;
-      if (nombre === 'hu006_guardar_techo_venta')
+      if (nombre === 'hu006_guardar_techo_venta_http')
         return { data: { codven: '50', decision: 'Sin techo', codtte: null, guardado: true, reutilizada: false }, error: null };
       return { data: { ...venta, autor: { codusu: perfiles[token]?.codusu ?? '0', nombre: 'QA' } }, error: null };
     },
@@ -88,7 +88,7 @@ test('HU-006 HTTP: registra venta directa con el rol autenticado y llama una RPC
   assert.equal(r.status, 201);
   assert.equal((r.body.data as typeof venta).codven, '50');
   assert.deepEqual(llamadas, [{
-    nombre: 'hu006_crear_venta', token: 'vendedor', parametros: {
+    nombre: 'hu006_crear_venta_http', token: 'vendedor', parametros: {
       p_coduni: '10', p_codcli: '20', p_codusuresp: '3', p_codsedatencion: '2',
       p_fecven: '2026-11-09', p_modcomven: 'Crédito', p_adicionalacordado: null,
       p_descuento: 0, p_motivodescuento: null, p_codusuautorizadesc: null, p_conftelefonicadesc: false,
@@ -151,7 +151,7 @@ test('HU-006 HTTP: replay devuelve 200 y la conversión puede heredar techo sin 
   assert.equal((replay.body.data as typeof venta).reutilizada, true);
   assert.equal(llamadas.length, 2);
     assert.equal((llamadas[0]!.parametros as Record<string, unknown>).p_techo, null);
-  }, nombre => nombre === 'hu006_crear_venta'
+  }, nombre => nombre === 'hu006_crear_venta_http'
     ? { data: { ...venta, codsep: '8', reutilizada: ++creaciones > 1 }, error: null }
     : null);
 });
@@ -165,7 +165,7 @@ test('HU-006 HTTP: conversión con techo heredado envía adicionalTechoAcordado 
   assert.equal((llamadas[0]!.parametros as Record<string, unknown>).p_techo, null);
   assert.equal((llamadas[0]!.parametros as Record<string, unknown>).p_adicionalacordado, 175);
   assert.equal(llamadas.length, 1, 'la conversión solo crea mediante hu006_crear_venta; la BD hereda el techo');
-}, nombre => nombre === 'hu006_crear_venta' ? { data: venta, error: null } : null));
+}, nombre => nombre === 'hu006_crear_venta_http' ? { data: venta, error: null } : null));
 
 test('HU-006 HTTP: los tres roles comerciales están permitidos; sesión ausente o rol ajeno se rechaza', async () => entorno(async (base, llamadas) => {
   for (const token of ['gerente', 'admin', 'vendedor']) {
@@ -240,7 +240,7 @@ test('HU-006 HTTP: resolver techo usa solo la RPC de venta y decisiones finales 
   }));
   assert.equal(ok.status, 200);
   assert.deepEqual(llamadas[0], {
-    nombre: 'hu006_guardar_techo_venta', token: 'vendedor',
+    nombre: 'hu006_guardar_techo_venta_http', token: 'vendedor',
     parametros: { p_codven: '50', p_decisiontecho: 'Sin techo', p_codtte: null, p_adicionalacordado: null }
   });
   const con = await respuesta(fetch(`${base}/api/ventas/50/techo`, {
@@ -249,10 +249,10 @@ test('HU-006 HTTP: resolver techo usa solo la RPC de venta y decisiones finales 
   }));
   assert.equal(con.status, 200);
   assert.deepEqual(llamadas[1], {
-    nombre: 'hu006_guardar_techo_venta', token: 'vendedor',
+    nombre: 'hu006_guardar_techo_venta_http', token: 'vendedor',
     parametros: { p_codven: '50', p_decisiontecho: 'Con techo', p_codtte: '4', p_adicionalacordado: 3200 }
   });
-}, (nombre) => nombre === 'hu006_guardar_techo_venta'
+}, (nombre) => nombre === 'hu006_guardar_techo_venta_http'
   ? { data: { codven: '50', decision: 'Sin techo', codtte: null, guardado: true, reutilizada: false }, error: null }
   : null));
 
@@ -264,9 +264,9 @@ test('HU-021/HU-006 HTTP: PT623 de una venta cancelada responde 409 al intentar 
     }));
     assert.equal(r.status, 409);
     assert.equal(llamadas.length, 1);
-    assert.equal(llamadas[0]!.nombre, 'hu006_guardar_techo_venta');
+    assert.equal(llamadas[0]!.nombre, 'hu006_guardar_techo_venta_http');
     assert.ok(!JSON.stringify(r.body).includes('detalle SQL privado'));
-  }, nombre => nombre === 'hu006_guardar_techo_venta'
+  }, nombre => nombre === 'hu006_guardar_techo_venta_http'
     ? { data: null, error: { code: 'PT623', message: 'detalle SQL privado', details: 'privado', hint: 'secreto' } }
     : null);
 });
@@ -282,11 +282,11 @@ test('HU-006 HTTP: registra posteriormente el comprobante por la RPC y admite lo
       comprobanteExterno: { referencia: 'F001-001234', fecha: '2026-11-10' }, guardado: true, reutilizada: true });
   }
   assert.deepEqual(llamadas.map(llamada => ({ nombre: llamada.nombre, parametros: llamada.parametros })), [
-    { nombre: 'hu006_guardar_comprobante_venta', parametros: { p_codven: '50', p_referencia: 'F001-001234', p_fecha: '2026-11-10' } },
-    { nombre: 'hu006_guardar_comprobante_venta', parametros: { p_codven: '50', p_referencia: 'F001-001234', p_fecha: '2026-11-10' } },
-    { nombre: 'hu006_guardar_comprobante_venta', parametros: { p_codven: '50', p_referencia: 'F001-001234', p_fecha: '2026-11-10' } }
+    { nombre: 'hu006_guardar_comprobante_venta_http', parametros: { p_codven: '50', p_referencia: 'F001-001234', p_fecha: '2026-11-10' } },
+    { nombre: 'hu006_guardar_comprobante_venta_http', parametros: { p_codven: '50', p_referencia: 'F001-001234', p_fecha: '2026-11-10' } },
+    { nombre: 'hu006_guardar_comprobante_venta_http', parametros: { p_codven: '50', p_referencia: 'F001-001234', p_fecha: '2026-11-10' } }
   ]);
-}, nombre => nombre === 'hu006_guardar_comprobante_venta'
+}, nombre => nombre === 'hu006_guardar_comprobante_venta_http'
   ? { data: { codven: '50', comprobanteExterno: { referencia: 'F001-001234', fecha: '2026-11-10' }, guardado: true, reutilizada: true }, error: null }
   : null));
 
@@ -308,7 +308,7 @@ test('HU-006 HTTP: valida el comprobante posterior y mapea conflicto sin filtrar
     }));
     assert.equal(r.status, 409);
     assert.ok(!JSON.stringify(r.body).includes('detalle SQL privado'));
-  }, nombre => nombre === 'hu006_guardar_comprobante_venta'
+  }, nombre => nombre === 'hu006_guardar_comprobante_venta_http'
     ? { data: null, error: { code: 'PT618', message: 'detalle SQL privado' } }
     : null);
 });
@@ -328,7 +328,7 @@ test('HU-006 HTTP: mapea errores de negocio y contrato sin filtrar detalles inte
     }));
     assert.equal(r.status, status, codigo);
     assert.ok(!JSON.stringify(r.body).includes('detalle SQL privado'));
-  }, nombre => nombre === 'hu006_crear_venta'
+  }, nombre => nombre === 'hu006_crear_venta_http'
     ? { data: null, error: { code: codigo, message: 'detalle SQL privado', details: 'privado', hint: 'secreto' } }
     : null);
 }
@@ -345,10 +345,10 @@ test('HU-006 HTTP: GET /api/ventas lista ventas reales para los tres roles y nor
       assert.deepEqual(r.body.data, lista);
     }
     assert.deepEqual(llamadas, ['gerente', 'admin', 'vendedor'].map(token => ({
-      nombre: 'hu006_listar_ventas', token,
+      nombre: 'hu006_listar_ventas_http', token,
       parametros: { p_busqueda: 'HU006-M-26', p_limite: 20, p_offset: 5 }
     })));
-  }, nombre => nombre === 'hu006_listar_ventas' ? { data: lista, error: null } : null);
+  }, nombre => nombre === 'hu006_listar_ventas_http' ? { data: lista, error: null } : null);
 });
 
 test('HU-006 HTTP: GET /api/ventas mantiene lista vacía como 200 y restringe autenticación y roles', async () => {
@@ -358,7 +358,7 @@ test('HU-006 HTTP: GET /api/ventas mantiene lista vacía como 200 y restringe au
     assert.deepEqual(vacia.body.data, { items: [], total: 0, limite: 50, offset: 0 });
     assert.equal((await respuesta(fetch(`${base}/api/ventas`))).status, 401);
     assert.equal((await respuesta(fetch(`${base}/api/ventas`, { headers: { Authorization: 'Bearer auxiliar' } }))).status, 403);
-  }, nombre => nombre === 'hu006_listar_ventas'
+  }, nombre => nombre === 'hu006_listar_ventas_http'
     ? { data: { items: [], total: 0, limite: 50, offset: 0 }, error: null }
     : null);
 });
@@ -374,7 +374,7 @@ test('HU-006 HTTP: GET /api/ventas valida filtros antes de RPC y no filtra error
     const r = await respuesta(fetch(`${base}/api/ventas`, { headers: { Authorization: 'Bearer vendedor' } }));
     assert.equal(r.status, 503);
     assert.ok(!JSON.stringify(r.body).includes('detalle SQL privado'));
-  }, nombre => nombre === 'hu006_listar_ventas'
+  }, nombre => nombre === 'hu006_listar_ventas_http'
     ? { data: null, error: { code: 'PGRST202', message: 'detalle SQL privado' } }
     : null);
 });

@@ -52,8 +52,8 @@ test('HU-006 HTTP: consulta la venta de una moto con la sesión del usuario y un
   const r = await leer(fetch(`${base}/api/unidades/10/venta`, { headers: { Authorization: 'Bearer vendedor' } }));
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.data, ventaDeUnidad);
-  assert.deepEqual(llamadas, [{ nombre: 'hu006_venta_de_unidad', parametros: { p_coduni: '10' }, token: 'vendedor' }]);
-}, nombre => (nombre === 'hu006_venta_de_unidad' ? { data: ventaDeUnidad, error: null } : null)));
+  assert.deepEqual(llamadas, [{ nombre: 'hu006_venta_de_unidad_http', parametros: { p_coduni: '10' }, token: 'vendedor' }]);
+}, nombre => (nombre === 'hu006_venta_de_unidad_http' ? { data: ventaDeUnidad, error: null } : null)));
 
 test('HU-006 HTTP: una moto sin venta devuelve null; identificador inválido 400 sin llamar a la base', async () => entorno(async (base, llamadas) => {
   const sinVenta = await leer(fetch(`${base}/api/unidades/11/venta`, { headers: { Authorization: 'Bearer admin' } }));
