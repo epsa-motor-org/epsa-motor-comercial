@@ -73,25 +73,56 @@ export function validarDocumento(tipo, num) {
   return "";
 }
 
-// Fechas en hora de Lima
-export const fechaLocal = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+// Fechas y horas siempre en hora de Lima (America/Lima, UTC−5, sin horario de verano), aunque la computadora o el
+// navegador estén en otra zona. La base guarda los instantes en UTC (por ejemplo, 2026-11-17T01:25:39Z es el 16/11 a
+// las 20:25 en Lima): nunca se toma el día cortando el texto, se convierte. Las fechas de negocio (fecha de pago, de
+// la venta, de la entrega) llegan como «YYYY-MM-DD» o a medianoche UTC y se muestran tal cual.
+export const ZONA_LIMA = "America/Lima";
+const FORMATO_DIA = new Intl.DateTimeFormat("en-CA", { timeZone: ZONA_LIMA, year: "numeric", month: "2-digit", day: "2-digit" });
+const esDia = (t) => /^\d{4}-\d{2}-\d{2}$/.test(t);
+// Fecha de negocio guardada como timestamp a medianoche UTC (así se guarda la fecha de la venta)
+const MEDIANOCHE_UTC = /^(\d{4}-\d{2}-\d{2})[T ]00:00:00(?:\.0+)?(?:Z|[+-]00(?::?00)?)$/;
+const instante = (v) => (v instanceof Date ? v : new Date(v));
+// Día YYYY-MM-DD en Lima de un instante (Date o ISO)
+export const fechaLocal = (d = new Date()) => { const x = instante(d); return Number.isNaN(x.getTime()) ? "" : FORMATO_DIA.format(x); };
 export const hoyLocal = () => fechaLocal(new Date());
 export const mesLocal = () => hoyLocal().slice(0, 7);
-export const sumarDias = (n, desde = new Date()) => { const d = new Date(desde); d.setDate(d.getDate() + n); return fechaLocal(d); };
+// Día de un valor de la base: «YYYY-MM-DD» o medianoche UTC → tal cual; instante con hora → su día en Lima
+export function diaLima(v) {
+  if (v === null || v === undefined || v === "") return "";
+  if (v instanceof Date) return fechaLocal(v);
+  const t = String(v).trim();
+  if (esDia(t)) return t;
+  const m = MEDIANOCHE_UTC.exec(t);
+  if (m) return m[1];
+  const d = fechaLocal(t);
+  return d || t.slice(0, 10);
+}
+// Mediodía en Lima de un día (para dar formato a una fecha sin que cambie de día en ninguna zona)
+const mediodiaLima = (dia) => new Date(`${dia}T12:00:00-05:00`);
+export const sumarDias = (n, desde = new Date()) => {
+  const [y, m, d] = diaLima(desde).split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+};
 export const limpiarTexto = (v) => String(v ?? "").trim().replace(/\s+/g, " ");
 // Días entre dos fechas (YYYY-MM-DD o ISO), contando en hora de Lima
-const soloFecha = (f) => (String(f).length > 10 ? fechaLocal(new Date(f)) : String(f));
-export const diasEntre = (desde, hasta = hoyLocal()) => Math.round((new Date(`${soloFecha(hasta)}T00:00:00`) - new Date(`${soloFecha(desde)}T00:00:00`)) / 86400000);
+export const diasEntre = (desde, hasta = hoyLocal()) => Math.round((Date.parse(`${diaLima(hasta)}T00:00:00Z`) - Date.parse(`${diaLima(desde)}T00:00:00Z`)) / 86400000);
+// Hora de Lima: "20:25"
+export const horaLima = (iso) => { if (!iso) return ""; const d = instante(iso); return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: ZONA_LIMA }); };
+// Fecha en Lima con el formato pedido (opciones de toLocaleDateString)
+export function formatoDia(f, opciones) {
+  const dia = diaLima(f);
+  if (!esDia(dia)) return "";
+  return mediodiaLima(dia).toLocaleDateString("es-PE", { ...opciones, timeZone: ZONA_LIMA });
+}
 // Fecha y hora legibles: "17 oct, 10:20"
 export function fechaHora(iso) {
   if (!iso) return "";
-  const d = new Date(iso);
-  return `${d.toLocaleDateString("es-PE", { day: "numeric", month: "short" }).replace(".", "")}, ${d.toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+  return `${formatoDia(fechaLocal(iso), { day: "numeric", month: "short" }).replace(".", "")}, ${horaLima(iso)}`;
 }
 export function fechaLarga(f) {
   if (!f) return "";
-  const d = new Date(String(f).length > 10 ? f : `${f}T12:00:00`);
-  return d.toLocaleDateString("es-PE", { weekday: "long", day: "numeric", month: "long" });
+  return formatoDia(f, { weekday: "long", day: "numeric", month: "long" });
 }
 // "hace 5 min", "hace 2 h", "hace 3 días"
 export function haceCuanto(iso, ahora = Date.now()) {

@@ -14,6 +14,7 @@ import { inventarioApi, useConsultaCentral } from "../../servicios/central";
 import { ubicacionDe } from "../../servicios/inventarioCentral";
 import * as S from "../../servicios/separacionCentral";
 import * as V from "../../servicios/ventaCentral";
+import { formatoDia } from "../../lib/validar";
 import { Aviso, Campo, Card, Modal, PageHeader, Tabla, Vacio, btnMini } from "../ui";
 import { AvisoConexion, BarraActualizacion, ColorUnidad, Paginador, PillComercial, sinApi } from "./Central";
 import SeccionPendiente from "./SeccionPendiente";
@@ -21,7 +22,7 @@ import VenderMotoCentral from "./VenderCentral";
 import { DetalleCancelacionModal } from "./CancelarCentral";
 
 // Fecha corta de la venta (12 nov 2026): la fecha se guarda como el día indicado
-const fechaCorta = (f) => { const d = new Date(`${V.soloFecha(f)}T12:00:00`); return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("es-PE", { day: "numeric", month: "short", year: "numeric" }).replace(".", ""); };
+const fechaCorta = (f) => formatoDia(f, { day: "numeric", month: "short", year: "numeric" }).replace(".", "");
 const textoTecho = (t) => (!t?.decision ? "Sin dato" : t.decision === S.CON_TECHO ? t.nombre || "Con techo" : t.decision === S.SIN_TECHO ? "Sin techo" : "Por definir");
 
 export default function VentasCentral() {

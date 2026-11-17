@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, Link } from "react-router-dom";
 import { IconMenu, IconClose, IconSun, IconMoon } from "../Icons";
+import { RESERVA_INSIGNIA } from "../ui";
 import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../ThemeContext";
 import { ROLES } from "../../data/mockData";
@@ -93,7 +94,7 @@ export default function DashboardLayout() {
           </nav>
         </aside>
         {/* Contenido */}
-        <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8"><div className="fade-in mx-auto max-w-[1500px]"><Outlet /></div></main>
+        <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8" style={{ paddingBottom: `calc(2rem + ${RESERVA_INSIGNIA})` }}><div className="fade-in mx-auto max-w-[1500px]"><Outlet /></div></main>
       </div>
     </div>
   );

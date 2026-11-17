@@ -9,6 +9,7 @@ import { MODO_REAL } from "../../lib/config";
 import { BUCKET_FACTURAS, documentoRecibidoApi, urlFirmadaStorage } from "../../lib/api";
 import { mensajeError } from "../../lib/errores";
 import { useConsultaCentral } from "../../servicios/central";
+import { formatoDia } from "../../lib/validar";
 import { ESTADO_DOCUMENTO, TONO_DOCUMENTO, reprocesarFactura, textoCodigo } from "../../servicios/facturas";
 import { Aviso, Card, PageHeader, Tabla, Vacio, btnMini, useToast } from "../../components/ui";
 import { Pill } from "../../components/dashboard/Sprint2";
@@ -16,7 +17,7 @@ import { AvisoConexion, BarraActualizacion, capital, fechaCompleta } from "../..
 import SeccionPendiente from "../../components/dashboard/SeccionPendiente";
 
 const soles = (n) => (n == null || n === "" ? "—" : `S/ ${Number(n).toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
-const fecha = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString("es-PE", { day: "numeric", month: "short", year: "numeric" }).replace(".", "") : "—");
+const fecha = (d) => (d ? formatoDia(d, { day: "numeric", month: "short", year: "numeric" }).replace(".", "") || "—" : "—");
 const TONO_LINEA = { Procesada: "verde", Revision: "naranja", Error: "rojo", Pendiente: "gris", Omitida: "gris" };
 const ESTADO_LINEA = { Procesada: "Lista", Revision: "Por revisar", Error: "Error", Pendiente: "Pendiente", Omitida: "Omitida" };
 

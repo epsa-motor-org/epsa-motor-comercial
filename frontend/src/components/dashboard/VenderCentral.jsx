@@ -30,7 +30,8 @@ import { IconCheck } from "../Icons";
 import { BuscarInteresado, CabeceraMoto, ElegirTechoModal, Opcion, VistaCaptura } from "./SepararCentral";
 import { BotonCancelar, NotaPermisoCancelar } from "./CancelarCentral";
 import { BotonCorregir } from "./CorregirCentral";
-import { EntregaVenta } from "./EntregaCentral";
+import { EntregaVenta, VentaCanceladaEntregadaCard } from "./EntregaCentral";
+import { useAuth } from "../../context/AuthContext";
 import * as E from "../../servicios/entregaCentral";
 import { VENTA } from "../../servicios/cancelacionCentral";
 
@@ -345,14 +346,17 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
           toast("La venta sí quedó guardada");
           onHecho?.(ahora);
         } else if (ahora && ahora.estado !== "Cancelada") {
+          // Otra persona la vendió primero (QA 16/11, EMT-156): el servidor puede responder 500 en vez de 409
           setBloqueada(true); onConflicto?.();
-          setErr({ general: `${motivo}. No se guardó esta venta: la moto ya tiene otra venta registrada (otra persona la vendió). Revisa su ficha.` });
+          setErr({ general: V.OTRA_VENTA });
         } else if (ahora === null || ahora?.estado === "Cancelada") {
           setErr({ general: `${motivo} y la venta no se guardó: la moto sigue sin vender y tus datos siguen aquí. Vuelve a pulsar «Registrar venta». Si se repite, avisa a soporte con la hora y la moto.` });
         } else setErr({ general: NO_CONFIRMADO });
       } else if (er.status === 409 && !["techo", "comprobante"].includes(campo)) {
         setBloqueada(true); onConflicto?.();
-        setErr({ general: `${mensajeError(er)}. No se guardó esta venta: la moto cambió antes (otra persona la vendió o la separó, se canceló su separación o ya quedó guardado un intento anterior). Revisa su ficha.` });
+        const ahora = await V.ventaDeUnidadApi(unidad.coduni).catch(() => undefined);
+        if (ahora && ahora.estado !== "Cancelada" && !(codcli && String(ahora.comprador?.codcli ?? "") === String(codcli))) setErr({ general: V.OTRA_VENTA });
+        else setErr({ general: `${mensajeError(er)}. No se guardó esta venta: la moto cambió antes (otra persona la vendió o la separó, se canceló su separación o ya quedó guardado un intento anterior). Revisa su ficha.` });
       } else if (campo === "adicional") setErr({ adicional: mensajeError(er) });
       else if (campo === "descuento") setErr({ descuento: mensajeError(er) });
       else if (campo === "techo") setErr({ techo: V.textoErrorTecho(er, { cambioSeparacion: techoDeSeparacionCambio, instalado }) });
@@ -756,17 +760,25 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
 // HU-021: «Cancelar venta» (onCancelar) para el gerente, la administradora o el vendedor responsable vigente
 export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, onCorregir, onEntrega, version = 0 }) {
   const toast = useToast();
+  const { user } = useAuth();
   const activo = unidad?.comercial === "Vendida";
   const consulta = useConsultaCentral(() => V.ventaDeUnidadApi(unidad.coduni), [unidad?.coduni, version], { activo, intervalo: 20000, clave: `venta:${unidad?.coduni}` });
   const [eligiendo, setEligiendo] = useState(false);
   const [comprobante, setComprobante] = useState(false);
   const vta = consulta.data;
-  // HU-032: entrega efectiva de esta venta (la preparación y la ubicación se revisan en el servidor)
+  // HU-032: entrega efectiva de esta venta (la preparación y la ubicación se revisan en el servidor). Al vendedor que
+  // no es su responsable el servidor no se la muestra: no se consulta.
+  const verEntrega = Boolean(vta && E.puedeVerEntrega(user, vta));
   const prepClave = `${unidad?.preparacion?.estado || ""}|${unidad?.ubicacion?.codubi || ""}|${unidad?.movimiento_activo?.estado || ""}|${vta?.techo?.decision || ""}`;
-  const entrega = useConsultaCentral(() => E.entregaDeVentaApi(vta.codven), [vta?.codven, version, prepClave], { activo: Boolean(activo && vta?.codven), intervalo: 20000, clave: `entrega:${vta?.codven}` });
+  const entrega = useConsultaCentral(() => E.entregaDeVentaApi(vta.codven), [vta?.codven, version, prepClave], { activo: Boolean(activo && vta?.codven && verEntrega), intervalo: 20000, clave: `entrega:${vta?.codven}` });
+  // Vendida sin venta vigente: su venta se canceló después de entregarla (la moto espera el retorno; PO 16/11)
+  const sinVigente = activo && !vta && !consulta.cargando && !consulta.error && consulta.data === null;
+  const cancelada = useConsultaCentral(() => E.ventaCanceladaEntregadaApi(unidad, user), [unidad?.coduni, unidad?.nummotuni, version], { activo: sinVigente, intervalo: 30000, clave: `venta-cancelada-entregada:${unidad?.coduni}` });
   const estadoEntrega = entrega.data?.estado || "";
-  useEffect(() => { onEntrega?.(entrega.data || null); }, [entrega.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const entregaFicha = vta ? entrega.data || null : sinVigente ? cancelada.data?.entrega || null : null;
+  useEffect(() => { onEntrega?.(entregaFicha); }, [entregaFicha]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!activo) return null;
+  if (sinVigente) return <VentaCanceladaEntregadaCard unidad={unidad} consulta={cancelada} />;
   const entregada = estadoEntrega === E.ENTREGADA;
   async function verEvidencia(ruta) {
     const ventana = window.open("", "_blank");
@@ -847,7 +859,7 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
           {obs.resto && <Fila k="Observación">{obs.resto}</Fila>}
         </dl>
       )}
-      {vta && <EntregaVenta venta={vta} unidad={unidad} consulta={entrega} puedeEditar={puedeEditar} onCambio={listo} />}
+      {vta && (verEntrega ? <EntregaVenta venta={vta} unidad={unidad} consulta={entrega} puedeEditar={puedeEditar} onCambio={listo} /> : <EntregaVenta venta={vta} unidad={unidad} consulta={{ error: { status: 403 } }} puedeEditar={false} />)}
       {vta && entregada && onCorregir && <p className="mt-3 text-[12px] text-slate-500" data-nota-corregir-entregada>Corrección: con la entrega registrada ya no se corrige el comprador ni la moto. Si hay que revertirla, se cancela la venta con la decisión del gerente.</p>}
       {vta && onCancelar && <NotaPermisoCancelar operacion={vta} />}
       {eligiendo && vta && <ElegirTechoModal unidad={unidad} comprador={vta.comprador} que="venta" venta={vta} guardar={(d, tipo, adicional) => V.guardarTechoVentaApi(vta.codven, d, tipo, adicional)} onClose={() => setEligiendo(false)} onGuardado={() => { setEligiendo(false); listo(); }} />}

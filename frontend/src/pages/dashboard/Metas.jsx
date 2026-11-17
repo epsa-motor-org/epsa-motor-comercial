@@ -8,7 +8,7 @@ import { Progreso } from "../../components/charts";
 import { mesLocal } from "../../lib/validar";
 
 const MES_VALIDO = /^\d{4}-(0[1-9]|1[0-2])$/;
-const mesDesde = (n) => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+const mesDesde = (n) => { const [y, m] = mesLocal().split("-").map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
 
 export default function Metas() {
   const { metas, ventas, agregar, actualizar, eliminar } = useApp();

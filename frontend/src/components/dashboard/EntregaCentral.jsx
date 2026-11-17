@@ -14,7 +14,8 @@ import { sinRespuesta, useIntento } from "../../servicios/central";
 import * as E from "../../servicios/entregaCentral";
 import * as S from "../../servicios/separacionCentral";
 import * as V from "../../servicios/ventaCentral";
-import { Aviso, Campo, Modal, useToast } from "../ui";
+import { Aviso, Campo, Card, Modal, useToast } from "../ui";
+import { fechaCompleta } from "./Central";
 
 const TONOS = {
   verde: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300",
@@ -49,7 +50,7 @@ export function EntregaVenta({ venta, unidad, consulta, puedeEditar = true, onCa
     return (
       <section className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-white/10" data-entrega-venta="error">
         <h3 className="text-[15px] font-bold text-marino dark:text-white">Entrega</h3>
-        <p className="mt-1 text-[13px] text-slate-500">{S.faltaInstalar(consulta.error) ? "El registro de la entrega (HU-032) estará disponible cuando se publique su versión del servidor. Por ahora la venta figura pendiente de entrega." : `No se pudo consultar la entrega: ${mensajeError(consulta.error)}`}</p>
+        <p className="mt-1 text-[13px] text-slate-500">{S.faltaInstalar(consulta.error) ? "El registro de la entrega (HU-032) estará disponible cuando se publique su versión del servidor. Por ahora la venta figura pendiente de entrega." : consulta.error.status >= 500 ? "No se pudo consultar la entrega en este momento (el servidor respondió con un error). La venta no cambió: vuelve a intentarlo con «Actualizar»." : `No se pudo consultar la entrega: ${mensajeError(consulta.error)}`}</p>
       </section>
     );
   }
@@ -83,9 +84,9 @@ export function EntregaVenta({ venta, unidad, consulta, puedeEditar = true, onCa
         <>
           <dl className="mt-2 text-[13.5px]">
             <Dato k="Entrega acordada" data="acordada">{textoModalidad(est.modalidadAcordada, est.sedeAcordada)}</Dato>
-            <Dato k="Ubicación de la moto" data="ubicacion">{est.ubicacionActual?.sede || "Sin sede confirmada"}</Dato>
+            <Dato k="Ubicación de la moto" data="ubicacion">{est.ubicacionActual?.sede || (unidad?.ubicacion?.nomubi ? `${unidad.ubicacion.nomubi} (no es una sede de entrega)` : "Sin ubicación registrada")}</Dato>
             {est.preparacion && <Dato k="Preparación" data="preparacion">{`Armado: ${String(est.preparacion.armado || "Sin dato").toLowerCase()} · techo: ${String(est.preparacion.techo || "Sin dato").toLowerCase()}`}</Dato>}
-            {est.decisionTecho && <Dato k="Techo acordado" data="techo">{est.decisionTecho}</Dato>}
+            {est.decisionTecho && <Dato k="Techo acordado" data="techo">{est.decisionTecho === S.CON_TECHO && venta.techoNombre ? `Con techo: ${venta.techoNombre}` : est.decisionTecho}</Dato>}
           </dl>
           {faltan.length > 0 ? (
             <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[13px] text-amber-900 dark:bg-amber-500/10 dark:text-amber-200" data-entrega-falta={faltan.length}>
@@ -101,6 +102,49 @@ export function EntregaVenta({ venta, unidad, consulta, puedeEditar = true, onCa
       )}
       {registrando && <RegistrarEntregaModal venta={venta} unidad={unidad} estado={est} onClose={() => setRegistrando(false)} onHecho={() => { setRegistrando(false); consulta.refrescar?.(true); onCambio?.(); }} onCambio={() => { consulta.refrescar?.(true); onCambio?.(); }} />}
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Moto «Vendida» sin venta vigente: su venta se canceló después de entregarla (HU-021 con HU-032, PO 16/11)
+// ---------------------------------------------------------------------------------------------
+// consulta = useConsultaCentral de E.ventaCanceladaEntregadaApi. La entrega y la venta cancelada se muestran tal como
+// quedaron; la moto sigue bloqueada hasta que el gerente registre su retorno (no hay botones: no se edita nada aquí).
+export function VentaCanceladaEntregadaCard({ unidad, consulta }) {
+  const d = consulta?.data;
+  const v = d?.venta;
+  const c = d?.cancelacion;
+  return (
+    <Card data-venta-cancelada-entregada={v?.codven || ""} data-estado={d?.entrega ? "entregada" : v ? "sin-detalle" : d ? "sin-venta" : "cargando"}>
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-lg font-bold text-marino dark:text-white">{d?.entrega ? "Venta cancelada con la moto ya entregada" : "Sin venta vigente"}</h2>
+        {d?.entrega && <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-[12px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300" data-bloqueo-retorno>Bloqueada hasta registrar el retorno</span>}
+      </div>
+      {consulta?.error && !d && <div className="mt-3"><Aviso tipo="error">No se pudo consultar la venta cancelada de esta moto: {mensajeError(consulta.error)}</Aviso></div>}
+      {!d && !consulta?.error && <p className="mt-2 text-[13px] text-slate-500">Buscando la venta de esta moto…</p>}
+      {d && !v && <p className="mt-2 text-[13px] text-slate-500" data-sin-venta>La moto figura vendida, pero no tiene una venta vigente ni una venta cancelada a la vista. Actualiza la ficha; si sigue así, avisa al gerente.</p>}
+      {v && !d.entrega && (
+        <p className="mt-2 text-[13px] text-slate-500" data-sin-detalle>{`La venta N° ${v.codven} de esta moto se canceló y la moto sigue figurando vendida. Si ya se había entregado, queda bloqueada hasta que el gerente registre su retorno.${d.restringida ? " El detalle lo ven su responsable, el gerente y la administradora." : ""}`}</p>
+      )}
+      {v && d.entrega && (
+        <>
+          <p className="mt-1 text-[13px] text-slate-500" data-motivo-bloqueo>{E.BLOQUEO_RETORNO}</p>
+          <dl className="mt-3 text-[13.5px]">
+            <Dato k="Venta" data="venta">{`N° ${v.codven}, del ${fechaLarga(v.fecha)} · Cancelada`}</Dato>
+            <Dato k="Comprador" data="comprador">{v.comprador?.nombre || "Sin dato"}</Dato>
+            <Dato k="Techo acordado" data="techo">{v.techo?.decision === S.CON_TECHO ? `Con techo: ${v.techo?.nombre || "sin nombre"}` : v.techo?.decision || "Sin dato"}</Dato>
+            <Dato k="Total y recibido" data="importes">{`${S.soles(v.total)} · recibido ${S.soles(v.totalRecibido)}. Se conservan: no se registró ninguna devolución.`}</Dato>
+            <Dato k="Responsable" data="responsable">{v.responsable?.nombre || "Sin responsable asignado"}</Dato>
+            {c && <Dato k="Cancelación" data="cancelacion">{`${fechaCompleta(c.fecha)}, por ${c.actor?.nombre || "Sin dato"}. Motivo: ${c.motivo}`}</Dato>}
+          </dl>
+          <EntregaVenta venta={{ ...v, techoNombre: v.techo?.nombre || null }} unidad={unidad} consulta={{ data: d.entrega }} puedeEditar={false} />
+          <section className="mt-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4 dark:border-amber-500/30 dark:bg-amber-500/5" data-retorno="pendiente">
+            <h3 className="text-[15px] font-bold text-marino dark:text-white">Retorno de la moto</h3>
+            <p className="mt-1 text-[13px] text-slate-600 dark:text-slate-300">Pendiente de registrar. Lo registra el gerente con la fecha real del retorno, la ubicación, la condición de la moto y una observación. Al confirmarlo, la moto vuelve a ofrecerse si no tiene otro compromiso.</p>
+          </section>
+        </>
+      )}
+    </Card>
   );
 }
 

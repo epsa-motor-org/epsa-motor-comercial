@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useApp } from "../store/appStore.jsx";
 import { ORIGEN_RECEPCION } from "../data/mockData";
 import { useMovimientos } from "./movimientos";
+import { formatoDia } from "../lib/validar";
 
 export const ESTADOS_STOCK = ["Disponible", "Separada", "No disponible"];
 export const GRUPOS_LUGAR = [
@@ -42,7 +43,7 @@ export function useDisponibilidad() {
     const transito = transitoDe(u.id);
     const estado = u.disponibilidad === "Disponible" ? "Disponible" : u.disponibilidad === "Separada" ? "Separada" : "No disponible";
     const sep = estado === "Separada" ? separaciones.find((s) => s.unidad === u.id && s.estado === "Activa") : null;
-    const vence = sep?.vence ? new Date(`${sep.vence}T12:00:00`).toLocaleDateString("es-PE", { day: "numeric", month: "short" }).replace(".", "") : "";
+    const vence = sep?.vence ? formatoDia(sep.vence, { day: "numeric", month: "short" }).replace(".", "") : "";
     // Solo datos de la moto: nada del cliente
     const fila = { id: u.id, modelo: u.modelo, nombreModelo: u.nombreModelo, color: u.color, motor: u.motor, chasis: u.chasis, techo: u.techo || "Sin techo", proveedorTecho: u.proveedorTecho, estadoTecho: u.estadoTecho, preparacion: u.preparacion, disponibilidad: u.disponibilidad, ubicacion: u.ubicacion, historial: u.historial };
     return { ...fila, transito, porRecibir, lugar, tipoLugar, estado, vence, detalle: detalleDe(u, { porRecibir, transito, tipoLugar, estado, vence }) };

@@ -12,6 +12,7 @@ import { mensajeError } from "../../lib/errores";
 import { fechaLarga } from "../../lib/validar";
 import { sinRespuesta, useConsultaCentral, useIntento } from "../../servicios/central";
 import * as C from "../../servicios/cancelacionCentral";
+import * as E from "../../servicios/entregaCentral";
 import * as S from "../../servicios/separacionCentral";
 import { trasladoDe } from "../../servicios/inventarioCentral";
 import { Aviso, Campo, Card, Modal, useToast } from "../ui";
@@ -141,8 +142,8 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
           </div>
           <dl className="divide-y divide-slate-100 text-[13.5px] dark:divide-white/10">
             <Dato k="Moto">{moto}</Dato>
-            <Dato k="La moto queda" data="estado-moto"><span data-estado-moto={hecho.estadoComercialUnidad}>{hecho.entregaConservada ? "Sigue vendida: ya se entregó al comprador" : C.textoEstadoMoto(hecho.estadoComercialUnidad, trasladoDe(unidad))}</span></Dato>
-            {hecho.entregaConservada && <Dato k="Entrega" data="entrega-conservada">{`Se conserva la entrega${hecho.fechaEntrega ? ` del ${fechaLarga(String(hecho.fechaEntrega).slice(0, 10))}` : ""}: la moto no se libera. El retorno y si se vuelve a ofrecer lo decide el gerente.`}</Dato>}
+            <Dato k="La moto queda" data="estado-moto"><span data-estado-moto={hecho.estadoComercialUnidad}>{hecho.entregaConservada ? "Sigue vendida: ya se entregó al comprador" : C.textoEstadoMoto(hecho.estadoComercialUnidad, trasladoDe(unidad), esVenta ? "Venta" : "")}</span></Dato>
+            {hecho.entregaConservada && <Dato k="Entrega" data="entrega-conservada">{`Se conserva la entrega${hecho.fechaEntrega ? ` del ${fechaLarga(hecho.fechaEntrega)}` : ""}: la moto queda bloqueada hasta que el gerente registre su retorno. Con el retorno registrado, vuelve a ofrecerse.`}</Dato>}
             <Dato k="Motivo">{hecho.motivo}</Dato>
             {hecho.observacionDinero && <Dato k="Dinero recibido">{hecho.observacionDinero}</Dato>}
             {esVenta && f.totalRecibido !== undefined && <Dato k="Se conserva" data="conserva"><span className="cifra">{S.soles(f.totalRecibido)}</span> recibido{f.comprobanteExternoConservado ? " y el comprobante" : ""}</Dato>}
@@ -156,7 +157,7 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
 
   return (
     <Modal abierto onClose={onClose} titulo={titulo} ancho="max-w-xl" sinAvisoCambios={Boolean(enviando)}
-      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre para vender si no tiene otro compromiso. Si está en traslado, el traslado sigue igual.${esVenta ? " Si la moto ya se entregó, la entrega se conserva y la moto no se libera." : ""}`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); return !e.motivo && !e.observacion && !bloqueada; } }}
+      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre para vender si no tiene otro compromiso. Si está en traslado, el traslado sigue igual.${esVenta ? " Si la moto ya se entregó, la entrega se conserva y la moto queda bloqueada hasta que el gerente registre su retorno." : ""}`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); return !e.motivo && !e.observacion && !bloqueada; } }}
       pie={<>
         <button type="button" className="btn btn-secondary !py-2" onClick={onClose} data-volver-cancelacion>Volver</button>
         <button form="f-cancelar" className="btn !py-2 bg-acento text-white hover:bg-acento-600 disabled:opacity-60" disabled={Boolean(enviando) || bloqueada} data-confirmar-cancelacion>{enviando || titulo}</button>
@@ -227,8 +228,8 @@ export function CancelacionesUnidadCard({ unidad, version = 0 }) {
               {c.observacionFinanciera && <p className="mt-0.5"><span className="text-slate-500">Dinero:</span> {c.observacionFinanciera}</p>}
               <p className="mt-0.5 text-[12.5px] text-slate-500">
                 {recibido !== undefined && recibido !== null ? <>Recibido que se conserva: <span className="cifra">{S.soles(recibido)}</span>. </> : null}
-                {c.fechaOperacion ? `${C.textoTipo(c.tipoOperacion)} del ${fechaLarga(String(c.fechaOperacion).slice(0, 10))}. ` : ""}
-                {c.responsable?.nombre ? `Responsable: ${c.responsable.nombre}. ` : ""}La moto quedó: {C.textoEstadoMoto(c.estadoComercialResultante).toLowerCase()}.
+                {c.fechaOperacion ? `${C.textoTipo(c.tipoOperacion)} del ${fechaLarga(c.fechaOperacion)}. ` : ""}
+                {c.responsable?.nombre ? `Responsable: ${c.responsable.nombre}. ` : ""}<span data-moto-quedo={c.estadoComercialResultante}>La moto quedó: {C.textoEstadoMoto(c.estadoComercialResultante, "", c.tipoOperacion).replace(/^./, (x) => x.toLowerCase())}.</span>
               </p>
             </li>
           );
@@ -246,6 +247,7 @@ export function DetalleCancelacionModal({ tipo = C.VENTA, cod, titulo, onClose }
   const consulta = useConsultaCentral(() => C.cancelacionDeApi(tipo, cod), [tipo, cod], { clave: `cancelacion:${tipo}:${cod}` });
   const c = consulta.data;
   const e = consulta.error;
+  const entregaConservada = tipo === C.VENTA && c?.estadoComercialResultante === "Vendida";
   return (
     <Modal abierto onClose={onClose} titulo={titulo || "Cancelación"} ancho="max-w-lg" sinAvisoCambios pie={<button className="btn btn-secondary !py-2" onClick={onClose}>Cerrar</button>}>
       <div data-detalle-cancelacion={cod}>
@@ -258,10 +260,19 @@ export function DetalleCancelacionModal({ tipo = C.VENTA, cod, titulo, onClose }
             <Dato k="Fecha">{fechaCompleta(c.fecha)}</Dato>
             <Dato k="Motivo">{c.motivo}</Dato>
             <Dato k="Dinero recibido">{c.observacionFinanciera || "Sin dinero recibido"}</Dato>
-            <Dato k="La moto quedó">{C.textoEstadoMoto(c.estadoComercialResultante)}</Dato>
+            <Dato k="La moto quedó" data="moto-quedo">{C.textoEstadoMoto(c.estadoComercialResultante, "", c.tipoOperacion || (tipo === C.VENTA ? "Venta" : ""))}</Dato>
+            {entregaConservada && <EntregaConservada codven={cod} />}
           </dl>
         )}
       </div>
     </Modal>
   );
+}
+
+// Entrega que se conservó al cancelar una venta ya entregada (fecha y quién la recibió)
+function EntregaConservada({ codven }) {
+  const consulta = useConsultaCentral(() => E.entregaDeVentaApi(codven), [codven], { clave: `entrega:${codven}` });
+  const ent = consulta.data?.entrega;
+  if (!ent) return null;
+  return <Dato k="Entrega conservada" data="entrega-conservada">{`${fechaLarga(ent.fecha)}, en ${ent.sedeEfectiva?.nombre || ent.sedeAcordada?.nombre || "la sede acordada"}; recibió ${ent.receptor}. Su retorno lo registra el gerente.`}</Dato>;
 }

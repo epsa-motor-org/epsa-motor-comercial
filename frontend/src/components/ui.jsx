@@ -2,11 +2,44 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { IconClose, IconCheck, IconAlert } from "./Icons";
 
+// Insignia fija que agrega la plataforma de publicación («Powered by Netlify»: un iframe fijo abajo a la derecha,
+// encima de todo). Se reserva su alto abajo (variable --reserva-insignia) para que no tape los botones del pie de las
+// ventanas, los avisos ni el final de la página (QA 16/11, EMT-154: tapaba «Revisar y registrar» en 849×523).
+function medirInsignia() {
+  if (typeof document === "undefined") return 0;
+  const el = document.getElementById("nl-badge-frame") || document.querySelector('iframe[title="Powered by Netlify"]');
+  if (!el) return 0;
+  const cs = window.getComputedStyle(el);
+  const r = el.getBoundingClientRect();
+  if (cs.display === "none" || cs.visibility === "hidden" || !r.width || !r.height || r.top >= window.innerHeight) return 0;
+  return Math.max(0, Math.ceil(window.innerHeight - r.top)) + 8;
+}
+function useReservaInsignia() {
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    let previo = -1;
+    const aplicar = () => {
+      const px = medirInsignia();
+      if (px === previo) return;
+      previo = px;
+      document.documentElement.style.setProperty("--reserva-insignia", `${px}px`);
+    };
+    aplicar();
+    const obs = typeof MutationObserver !== "undefined" ? new MutationObserver(aplicar) : null;
+    obs?.observe(document.body, { childList: true, attributes: true, subtree: false, attributeFilter: ["style", "class"] });
+    window.addEventListener("resize", aplicar);
+    const t = window.setInterval(aplicar, 2000); // la insignia carga sola y puede cambiar de tamaño
+    return () => { obs?.disconnect(); window.removeEventListener("resize", aplicar); window.clearInterval(t); };
+  }, []);
+}
+export const RESERVA_INSIGNIA = "var(--reserva-insignia, 0px)";
+
 // Avisos (toasts)
 const ToastCtx = createContext(() => {});
 export const useToast = () => useContext(ToastCtx);
 
 export function ToastProvider({ children }) {
+  useReservaInsignia();
   const [items, setItems] = useState([]);
   const push = useCallback((msg, tipo = "ok") => {
     const id = Math.random();
@@ -16,7 +49,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastCtx.Provider value={push}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 left-1/2 z-[100] flex w-[92vw] max-w-sm -translate-x-1/2 flex-col gap-2 sm:left-auto sm:right-4 sm:translate-x-0" role="status" aria-live="polite">
+      <div className="pointer-events-none fixed bottom-4 left-1/2 z-[100] flex w-[92vw] max-w-sm -translate-x-1/2 flex-col gap-2 sm:left-auto sm:right-4 sm:translate-x-0" style={{ bottom: `calc(1rem + ${RESERVA_INSIGNIA})` }} role="status" aria-live="polite">
         {items.map((t) => (
           <div key={t.id} className={`fade-in pointer-events-auto flex items-start gap-2 rounded-lg px-4 py-3 text-[13.5px] font-medium text-white shadow-lg ${t.tipo === "error" ? "bg-acento" : "bg-marino"}`}>
             <span className="mt-0.5 shrink-0">{t.tipo === "error" ? <IconAlert className="h-4 w-4" /> : <IconCheck className="h-4 w-4" />}</span>
@@ -72,7 +105,8 @@ export function Modal({ abierto, onClose, titulo, children, ancho = "max-w-lg", 
 
   return (
     <div className="fixed inset-0 z-[90] flex items-end justify-center bg-marino/60 p-0 backdrop-blur-sm sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && pedirCierre()}>
-      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label={titulo}
+      <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label={titulo} data-modal
+        style={{ marginBottom: RESERVA_INSIGNIA, maxHeight: `min(92vh, calc(100vh - 2rem - ${RESERVA_INSIGNIA}))` }}
         className={`fade-in relative flex max-h-[92vh] w-full ${ancho} flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl outline-none dark:bg-[#121a2b] sm:rounded-xl2`}>
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 dark:border-white/10">
           <h2 className="text-[17px] font-bold text-marino dark:text-white">{titulo}</h2>

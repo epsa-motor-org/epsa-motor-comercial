@@ -2,6 +2,7 @@
 import { MODO_REAL } from "./config";
 import { consultarPdfFacturaApi, subirPdfFacturaApi, urlPdfFacturaApi } from "./api";
 import { ApiError } from "./errores";
+import { hoyLocal } from "./validar";
 
 const memoria = new Map();
 export const MAX_PDF = 10 * 1024 * 1024;
@@ -55,7 +56,7 @@ async function leerLocal(clave) {
 export async function subirPdfFactura(codcom, archivo) {
   const error = await validarPdfContenido(archivo);
   if (error) throw new ApiError(400, error);
-  const fecha = new Date().toLocaleDateString("en-CA");
+  const fecha = hoyLocal();
   if (MODO_REAL) {
     await subirPdfFacturaApi(codcom, archivo);
     return { codcom: String(codcom), api: true, nombre: archivo.name, tamano: archivo.size, fecha };

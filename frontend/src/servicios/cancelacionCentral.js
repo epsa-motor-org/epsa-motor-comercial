@@ -100,8 +100,12 @@ export const esMiCancelacion = (c, codusu, motivo) =>
 
 // Texto de cómo quedó la moto. Regla del PO del 14/11 (EMT-26/10156, 202611140005 de Michelle): un traslado en curso
 // no la bloquea; si no tiene otro compromiso queda libre y el traslado sigue («Libre para vender · En tránsito a …»).
-export const ESTADO_MOTO = { Disponible: "Libre para vender", Separada: "Sigue separada (tiene otra separación activa)", Vendida: "Sigue vendida (tiene otra venta vigente)", "No disponible": "No disponible para vender" };
-export const textoEstadoMoto = (e, traslado = "") => {
+// Una venta cancelada que deja la moto «Vendida» es una venta ya entregada (una moto no puede tener dos ventas
+// vigentes): la entrega se conserva y la moto queda bloqueada hasta que el gerente registre su retorno (PO 16/11).
+export const ESTADO_MOTO = { Disponible: "Libre para vender", Separada: "Sigue separada (tiene otra separación activa)", Vendida: "Sigue vendida (tiene una venta vigente)", "No disponible": "No disponible para vender" };
+export const VENDIDA_ENTREGADA = "Sigue vendida: ya se había entregado al comprador y queda bloqueada hasta que el gerente registre su retorno";
+export const textoEstadoMoto = (e, traslado = "", tipo = "") => {
+  if (e === "Vendida" && /^venta$/i.test(String(tipo))) return VENDIDA_ENTREGADA;
   const texto = ESTADO_MOTO[e] || e || "Sin dato";
   return e === "Disponible" && traslado ? `${texto} · ${traslado}` : texto;
 };

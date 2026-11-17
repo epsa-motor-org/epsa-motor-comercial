@@ -13,13 +13,15 @@ import { ESTADO_COMPRA } from "./Compras.HU-034";
 import { adjuntoRecordado, buscarPdfFactura, recordarAdjunto, subirPdfFactura, urlPdfFactura, validarPdf, validarPdfContenido } from "../../lib/archivos";
 import { claveModelo } from "../../lib/modelos";
 import { REFRESCO_MS } from "../../servicios/central";
+import { diaLima, hoyLocal } from "../../lib/validar";
 import useAutoRefresco from "../../hooks/useAutoRefresco";
 
 const FILA = () => ({ nummotuni: "", chauni: "" });
 const norm = (t) => String(t || "").trim().replace(/\s+/g, " ");
 const serie = (t) => norm(t).toUpperCase();
-const hoyISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-const fechaMinimaFactura = (feccom) => { const d = new Date(`${String(feccom || hoyISO()).slice(0, 10)}T12:00:00`); d.setFullYear(d.getFullYear() - 1); return d.toLocaleDateString("en-CA"); };
+const hoyISO = hoyLocal; // hoy en Lima
+// Un año antes de la compra (día de Lima)
+const fechaMinimaFactura = (feccom) => { const [y, m, d] = diaLima(feccom || hoyISO()).split("-").map(Number); return new Date(Date.UTC(y - 1, m - 1, d)).toISOString().slice(0, 10); };
 
 export default function CompraDetalle() {
   const { id } = useParams();
@@ -433,7 +435,7 @@ export default function CompraDetalle() {
         )}
         {det.unidades.length > 0 && (
           <div className="mt-6"><h3 className="mb-2 text-[14px] font-semibold text-marino dark:text-white">Unidades ya identificadas ({det.unidades.length})</h3>
-            <Tabla columnas={["#", "N° de motor", "N° de chasis", "Color", "Fecha"]}>{det.unidades.map((u, i) => <tr key={u.coduni || u.nummotuni}><td className="px-4 py-2 text-slate-400">{i + 1}</td><td className="px-4 py-2 font-mono">{MODO_REAL && u.coduni ? <Link className="text-marino-700 hover:underline dark:text-white" to={`/admin/inventario/${u.coduni}`} state={{ unidad: { coduni: String(u.coduni), nummotuni: u.nummotuni, chauni: u.chauni, coluni: u.coluni || compra.colcom, nommod: compra.nommod, codcom: String(compra.codcom) } }}>{u.nummotuni}</Link> : u.nummotuni}</td><td className="px-4 py-2 font-mono">{u.chauni}</td><td className="px-4 py-2">{u.coluni || compra.colcom}</td><td className="px-4 py-2 text-slate-500">{String(u.fecreguni || "").slice(0, 10)}</td></tr>)}</Tabla></div>
+            <Tabla columnas={["#", "N° de motor", "N° de chasis", "Color", "Fecha"]}>{det.unidades.map((u, i) => <tr key={u.coduni || u.nummotuni}><td className="px-4 py-2 text-slate-400">{i + 1}</td><td className="px-4 py-2 font-mono">{MODO_REAL && u.coduni ? <Link className="text-marino-700 hover:underline dark:text-white" to={`/admin/inventario/${u.coduni}`} state={{ unidad: { coduni: String(u.coduni), nummotuni: u.nummotuni, chauni: u.chauni, coluni: u.coluni || compra.colcom, nommod: compra.nommod, codcom: String(compra.codcom) } }}>{u.nummotuni}</Link> : u.nummotuni}</td><td className="px-4 py-2 font-mono">{u.chauni}</td><td className="px-4 py-2">{u.coluni || compra.colcom}</td><td className="px-4 py-2 text-slate-500">{diaLima(u.fecreguni)}</td></tr>)}</Tabla></div>
         )}
       </Card>
     </div>

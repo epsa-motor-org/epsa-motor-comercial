@@ -6,7 +6,7 @@ import { useApp } from "../../store/appStore.jsx";
 import { useAuth } from "../../context/AuthContext";
 import { ESTADOS_MOVIMIENTO } from "../../data/mockData";
 import { useMovimientos } from "../../servicios/movimientos";
-import { diasEntre, fechaHora, haceCuanto } from "../../lib/validar";
+import { diasEntre, fechaHora, fechaLocal, haceCuanto, mesLocal } from "../../lib/validar";
 import { Card, PageHeader, Stat, Tabla, Vacio, btnMini } from "../../components/ui";
 import { ColorPunto, EstadoConexion, Pestanas, Pill, TONO_MOVIMIENTO, fechaCorta } from "../../components/dashboard/Sprint2";
 import { ModalLlegada, ModalRecibir, ModalTraslado, nombreModeloDe } from "../../components/dashboard/MovimientoModales";
@@ -34,7 +34,7 @@ export default function Movimientos() {
   const [modal, setModal] = useState(null);
   const recibe = puede("unidades.gestionar");
   const traslada = puede("unidades.trasladar");
-  const mes = new Date().toLocaleDateString("en-CA").slice(0, 7);
+  const mes = mesLocal();
   const unidad = (id) => unidades.find((u) => u.id === id);
   const nombre = (u) => nombreModeloDe(u, modelos, publicos);
 
@@ -42,11 +42,11 @@ export default function Movimientos() {
     const u = unidad(m.unidad);
     const q = f.q.trim().toLowerCase();
     if (q && !`${m.unidad} ${u?.motor || ""} ${u?.chasis || ""} ${nombre(u)}`.toLowerCase().includes(q)) return false;
-    const dia = new Date(m.salida).toLocaleDateString("en-CA");
+    const dia = fechaLocal(m.salida);
     return (!f.tipo || m.tipo === f.tipo) && (!f.estado || m.estado === f.estado) && (!f.lugar || m.origen === f.lugar || m.destino === f.lugar) && (!f.desde || dia >= f.desde) && (!f.hasta || dia <= f.hasta);
   }), [mv.movimientos, f, unidades]); // eslint-disable-line
 
-  const delMes = (tipo) => mv.movimientos.filter((m) => m.tipo === tipo && m.estado !== "Cancelado" && new Date(m.salida).toLocaleDateString("en-CA").startsWith(mes)).length;
+  const delMes = (tipo) => mv.movimientos.filter((m) => m.tipo === tipo && m.estado !== "Cancelado" && fechaLocal(m.salida).startsWith(mes)).length;
   const compraDe = (u) => compras.find((c) => String(c.codcom) === String(u.codcom));
   const identificada = (u) => (u.historial || []).map((h) => h.fecha).sort()[0] || "";
 

@@ -8,16 +8,18 @@ import { useAuth } from "../../context/AuthContext";
 import { Link } from "./LinkPanel";
 import { TONO_COMERCIAL, preparacionDe, techoDe, ubicacionDe } from "../../servicios/inventarioCentral";
 import { Aviso, btnMini } from "../ui";
+import { ZONA_LIMA, fechaLocal, formatoDia, horaLima, hoyLocal } from "../../lib/validar";
 import { ColorPunto, Pill } from "./Sprint2";
 
-export const hora = (iso) => (iso ? new Date(iso).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit", hour12: false }) : "");
+// Hora en Lima (la base guarda los instantes en UTC)
+export const hora = horaLima;
 
 // Hora de una lectura: «15:32:10» si es de hoy, «29/10 15:32:10» si es de otro día
 export const momentoLectura = (iso) => {
   if (!iso) return "";
   const d = new Date(iso);
-  const hms = d.toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-  return d.toDateString() === new Date().toDateString() ? hms : `${d.toLocaleDateString("es-PE", { day: "2-digit", month: "2-digit" })} ${hms}`;
+  const hms = d.toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: ZONA_LIMA });
+  return fechaLocal(d) === hoyLocal() ? hms : `${formatoDia(fechaLocal(d), { day: "2-digit", month: "2-digit" })} ${hms}`;
 };
 
 // Botón Actualizar con la hora de la última lectura correcta (la vista también se actualiza sola y al volver a la
@@ -157,8 +159,7 @@ export function Paginador({ total, limite, offset, onCambio }) {
 // Fecha y hora completas para trazabilidad
 export function fechaCompleta(iso) {
   if (!iso) return "";
-  const d = new Date(iso);
-  return `${d.toLocaleDateString("es-PE", { day: "numeric", month: "short", year: "numeric" }).replace(".", "")}, ${hora(iso)}`;
+  return `${formatoDia(fechaLocal(iso), { day: "numeric", month: "short", year: "numeric" }).replace(".", "")}, ${hora(iso)}`;
 }
 
 // HU-001 · Motos compradas que todavía no entran al inventario

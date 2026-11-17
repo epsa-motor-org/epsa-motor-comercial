@@ -94,7 +94,7 @@ function FichaCentral({ id }) {
   const prep = preparacionDe(p);
   // Un traslado no bloquea la venta (PO, 14/11): libre en camino se puede separar o vender; el traslado sigue
   const traslado = trasladoDe(u);
-  const textoSituacion = { Libre: traslado ? `${traslado}. Se puede separar o vender; el traslado sigue y no la deja lista para entregar.` : "Libre para vender, con o sin techo.", "No disponible": "Todavía no está a la venta.", Separada: "Tiene una separación activa.", Vendida: entregaVenta?.estado === "Entregada" ? "Entregada al comprador." : entregaVenta?.estado === "Lista para entrega" || entregaVenta?.estado === "Lista para entrega embalada" ? `Vendida, ${entregaVenta.estado.toLowerCase()}.` : "Vendida, pendiente de entrega." }[u.comercial] || "";
+  const textoSituacion = { Libre: traslado ? `${traslado}. Se puede separar o vender; el traslado sigue y no la deja lista para entregar.` : "Libre para vender, con o sin techo.", "No disponible": "Todavía no está a la venta.", Separada: "Tiene una separación activa.", Vendida: entregaVenta?.estado === "Entregada" && entregaVenta?.estadoVenta === "Cancelada" ? "Su venta se canceló después de entregarla: queda bloqueada hasta que el gerente registre su retorno." : entregaVenta?.estado === "Entregada" ? "Entregada al comprador." : entregaVenta?.estado === "Lista para entrega" || entregaVenta?.estado === "Lista para entrega embalada" ? `Vendida, ${entregaVenta.estado.toLowerCase()}.` : "Vendida, pendiente de entrega." }[u.comercial] || "";
 
   // Inventario central (API de Michelle): ubicación, techo, preparación y situación tal como están en la base,
   // con la preparación por etapas (HU-033), los movimientos (HU-003) y la configuración de techo (HU-004).
@@ -122,7 +122,7 @@ function FichaCentral({ id }) {
       <div className="mb-6"><PreparacionUnidadCard unidad={u} gestiona={gestiona} onCambio={recargar} /></div>
       <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
         <MovimientosUnidad unidad={u} gestiona={gestiona} ubicaciones={ubicaciones} onCambio={recargar} />
-        <ConfigTecho unidad={u} gestiona={gestiona} onGuardado={recargar} />
+        <ConfigTecho unidad={u} gestiona={gestiona} onGuardado={recargar} ventaCancelada={entregaVenta?.estadoVenta === "Cancelada" ? entregaVenta : null} />
       </div>
       {separando && <SepararMotoCentral unidad={u} onClose={() => setSeparando(false)} onHecho={recargar} onConflicto={recargar} />}
       {vendiendo && <VenderMotoCentral unidad={u} onClose={() => setVendiendo(false)} onHecho={recargar} onConflicto={recargar} />}
@@ -142,7 +142,7 @@ function BotonVolver() {
 }
 
 // HU-004 · Tipo de techo y proveedor (la API de Michelle; el avance de instalación es de HU-033)
-function ConfigTecho({ unidad, gestiona, onGuardado }) {
+function ConfigTecho({ unidad, gestiona, onGuardado, ventaCancelada = null }) {
   const toast = useToast(); const confirmar = useConfirm();
   const [cat, setCat] = useState(null); const [errCarga, setErrCarga] = useState("");
   const [f, setF] = useState({ techo: "", proveedor: "", detalle: "" }); const [inicial, setInicial] = useState(null);
@@ -195,7 +195,10 @@ function ConfigTecho({ unidad, gestiona, onGuardado }) {
   // ese techo («Con techo X») o ninguno («Sin techo»); la base lo vuelve a revisar (PT423). Vendida con el techo por
   // definir: primero se registra la decisión del comprador en la venta.
   const comp = unidad.techoComercial;
-  const vendidaPorDefinir = unidad.comercial === "Vendida" && (!comp || comp.decision === "Por definir");
+  // Vendida sin venta vigente (su venta se canceló después de entregarla, PO 16/11): no hay un techo por definir; el
+  // techo que se acordó en esa venta queda a la vista (QA 16/11, EMT-157: decía «Por definir» con una venta Sin techo)
+  const vendidaPorDefinir = unidad.comercial === "Vendida" && !ventaCancelada && (!comp || comp.decision === "Por definir");
+  const acordadoCancelada = ventaCancelada?.entrega?.decisionTecho?.decision || "";
   const permitido = (x) => !comp || comp.decision === "Por definir" ? !vendidaPorDefinir : comp.decision === "Con techo" ? String(x.codtte) === String(comp.codtte) : x.nomtte === "Sin techo";
   // Regla del PO del 13/11: la venta o separación pudo registrarse con un techo distinto del configurado (sin instalar).
   // La diferencia queda a la vista aquí para corregir la configuración.
@@ -238,6 +241,7 @@ function ConfigTecho({ unidad, gestiona, onGuardado }) {
       <p className="text-[13px] text-slate-500">Tipo de techo y proveedor de esta unidad. Su instalación se registra en Preparación.</p>
       {comp && comp.decision !== "Por definir" && <div className="mt-3"><Aviso tipo="info"><span data-techo-elegido-comprador={comp.decision}>{comp.decision === "Con techo" ? `El comprador eligió «${comp.nombre}» en su ${comp.origen === "Venta" ? "venta" : "separación"}. Solo se puede configurar ese techo; al guardarlo queda por instalar en Preparación.` : `El comprador eligió la moto sin techo en su ${comp.origen === "Venta" ? "venta" : "separación"}: no se le configura un techo.`}</span></Aviso></div>}
       {difAcordado && <div className="mt-3"><Aviso tipo="aviso"><span data-techo-diferencia-ficha>{difAcordado}</span></Aviso></div>}
+      {ventaCancelada && <div className="mt-3"><Aviso tipo="info"><span data-techo-venta-cancelada={acordadoCancelada}>{`La venta de esta moto se canceló después de entregarla${acordadoCancelada ? ` (techo acordado: ${acordadoCancelada === "Con techo" ? "con techo" : acordadoCancelada.toLowerCase()})` : ""}. No hay un techo por definir; la moto queda bloqueada hasta que el gerente registre su retorno.`}</span></Aviso></div>}
       {vendidaPorDefinir && <div className="mt-3"><Aviso tipo="aviso">La moto se vendió con el techo por definir. Cuando el comprador decida, regístralo en «Venta registrada» y luego configura aquí ese techo.</Aviso></div>}
       {!cat && !errCarga && <p className="mt-4 text-[13px] text-slate-500">Cargando la configuración del techo…</p>}
       {errCarga && <div className="mt-4"><Aviso tipo="error">No se pudo cargar el techo: {errCarga}</Aviso></div>}
