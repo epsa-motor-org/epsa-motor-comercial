@@ -12,7 +12,7 @@ import type {
 export const BUCKET_EVIDENCIA_VENTA = 'ventas-evidencia';
 
 export async function crearVenta(db: SupabaseClient, datos: CrearVentaInput): Promise<CrearVentaResultado> {
-  const { data, error } = await db.rpc('hu006_crear_venta', { ...datos });
+  const { data, error } = await db.rpc('hu006_crear_venta_http', { ...datos });
   if (error) throw error;
   return data as CrearVentaResultado;
 }
@@ -20,7 +20,7 @@ export async function crearVenta(db: SupabaseClient, datos: CrearVentaInput): Pr
 export async function guardarTechoVenta(
   db: SupabaseClient, datos: GuardarTechoVentaInput
 ): Promise<GuardarTechoVentaResultado> {
-  const { data, error } = await db.rpc('hu006_guardar_techo_venta', { ...datos });
+  const { data, error } = await db.rpc('hu006_guardar_techo_venta_http', { ...datos });
   if (error) throw error;
   return data as GuardarTechoVentaResultado;
 }
@@ -28,7 +28,7 @@ export async function guardarTechoVenta(
 export async function guardarComprobanteVenta(
   db: SupabaseClient, datos: GuardarComprobanteVentaInput
 ): Promise<GuardarComprobanteVentaResultado> {
-  const { data, error } = await db.rpc('hu006_guardar_comprobante_venta', { ...datos });
+  const { data, error } = await db.rpc('hu006_guardar_comprobante_venta_http', { ...datos });
   if (error) throw error;
   return data as GuardarComprobanteVentaResultado;
 }
@@ -36,7 +36,7 @@ export async function guardarComprobanteVenta(
 export async function consultarVentas(
   db: SupabaseClient, filtros: ConsultaVentasInput
 ): Promise<ConsultaVentasResultado> {
-  const { data, error } = await db.rpc('hu006_listar_ventas', filtros);
+  const { data, error } = await db.rpc('hu006_listar_ventas_http', filtros);
   if (error) throw error;
   return data as ConsultaVentasResultado;
 }
