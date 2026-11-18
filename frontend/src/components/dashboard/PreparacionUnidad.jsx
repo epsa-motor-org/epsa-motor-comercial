@@ -1,6 +1,7 @@
 // HU-033 · Preparación de una moto con las funciones de Michelle (techo, con fecha, autor y observación)
 // La moto se vende con o sin techo. Solo el techo que eligió el cliente al separar queda pendiente de armado
 // hasta que se registra instalado; sin techo elegido, la moto no tiene pendientes.
+// El armado de la moto también se registra aquí: la entrega «Armada» (HU-032) lo exige terminado (QA 18/11).
 // Registrar un avance no cambia la ubicación ni la situación comercial. Una reimportación no reinicia nada.
 import { useState } from "react";
 import { actualizarPreparacionApi, preparacionUnidadApi } from "../../lib/api";
@@ -120,6 +121,7 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
   const eComercial = po ? etapaComercialDe(po, unidad.techoComercial) : null;
   const e = eComercial || etapaOperativa(po);
   const t = po?.techo || {};
+  const armada = po?.armado === "Terminado";
   const abrir = (etapa, estado) => setModal({ unidad, po, etapa, estado });
   return (
     <Card data-card-preparacion>
@@ -143,13 +145,22 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
               ? <button className="btn btn-secondary !px-3 !py-1.5 text-[13px]" onClick={() => abrir("Techo", t.estado === "Pendiente" ? "En proceso" : t.estado === "En proceso" ? "Instalado" : "Instalado")}>Registrar avance del techo</button>
               : t.estado !== "No requiere" && <button className="btn btn-secondary !px-3 !py-1.5 text-[13px]" onClick={() => abrir("Techo", "No requiere")}>Marcar sin instalación</button>)}
           </li>
+          <li className="flex flex-wrap items-center justify-between gap-3 px-4 py-3" data-etapa="Armado" data-armado={po.armado || ""}>
+            <div className="min-w-0">
+              <p className="text-[14px] font-semibold text-marino dark:text-white">2. Armado</p>
+              <p className="text-[12.5px] text-slate-500">{armada ? "Armado terminado." : "Armado pendiente. Regístralo cuando la moto quede armada: se necesita para entregarla armada."}</p>
+            </div>
+            {gestiona && (armada
+              ? <button className="btn btn-secondary !px-3 !py-1.5 text-[13px]" onClick={() => abrir("Armado", "Pendiente")} data-corregir-armado>Corregir armado</button>
+              : <button className="btn btn-secondary !px-3 !py-1.5 text-[13px]" onClick={() => abrir("Armado", "Terminado")} data-registrar-armado>Registrar armado terminado</button>)}
+          </li>
           <li className="px-4 py-3" data-etapa="Entrega">
-            <p className="text-[14px] font-semibold text-marino dark:text-white">2. Condición de entrega</p>
-            <p className="text-[12.5px] text-slate-500" data-condicion-entrega={e.etapa}>{eComercial ? eComercial.nota : techoPorArmar(po) ? `Falta armar el techo (${t.configuracion}).` : "Lista para entrega. No equivale a entregada al comprador."}</p>
+            <p className="text-[14px] font-semibold text-marino dark:text-white">3. Condición de entrega</p>
+            <p className="text-[12.5px] text-slate-500" data-condicion-entrega={e.etapa}>{eComercial ? eComercial.nota : techoPorArmar(po) ? `Falta armar el techo (${t.configuracion}).` : armada ? "Lista para entrega. No equivale a entregada al comprador." : "Sin pendientes de techo. Para entregarla armada, falta registrar el armado. No equivale a entregada al comprador."}</p>
           </li>
         </ol>
         {po.ultimaActualizacion && <p className="mt-2 text-[12px] text-slate-400">Última actualización: {fechaCompleta(po.ultimaActualizacion)}{po.actualizadoPor?.nombre ? `, ${po.actualizadoPor.nombre}` : ""}</p>}
-        {!gestiona && <p className="mt-2 text-[12.5px] text-slate-400">Solo gerencia y administración registran el armado del techo.</p>}
+        {!gestiona && <p className="mt-2 text-[12.5px] text-slate-400">Solo gerencia y administración registran el armado y el techo.</p>}
         <div className="mt-5">
           <h3 className="text-[13.5px] font-semibold text-marino dark:text-white">Historial de preparación</h3>
           {historial.length === 0 ? <p className="mt-1 text-[13px] text-slate-400">Aún no se registraron avances.</p> : (

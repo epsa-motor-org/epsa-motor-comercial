@@ -68,6 +68,8 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
   // El aviso de error queda al final de la ventana: se lleva a la vista para que no pase desapercibido
   const refError = useRef(null);
   useEffect(() => { if (err.general) refError.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }); }, [err.general]);
+  // Si falta un dato al confirmar, se lleva a la vista el campo con el error (QA 18/11: quedaba debajo, sin verse)
+  const irAlError = (id) => { if (id) setTimeout(() => { const el = document.getElementById(id); el?.focus?.({ preventScroll: true }); el?.scrollIntoView?.({ block: "center", behavior: "smooth" }); }, 0); };
   const esVenta = tipo === C.VENTA;
   const cod = esVenta ? op.codven : op.codsep;
   const recibido = esVenta ? Number(op.totalRecibido) || 0 : Number(op.monto) || 0;
@@ -157,7 +159,7 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
 
   return (
     <Modal abierto onClose={onClose} titulo={titulo} ancho="max-w-xl" sinAvisoCambios={Boolean(enviando)}
-      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre para vender si no tiene otro compromiso. Si está en traslado, el traslado sigue igual.${esVenta ? " Si la moto ya se entregó, la entrega se conserva y la moto queda bloqueada hasta que el gerente registre su retorno." : ""}`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); return !e.motivo && !e.observacion && !bloqueada; } }}
+      confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre para vender si no tiene otro compromiso. Si está en traslado, el traslado sigue igual.${esVenta ? " Si la moto ya se entregó, la entrega se conserva y la moto queda bloqueada hasta que el gerente registre su retorno." : ""}`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); const ok = !e.motivo && !e.observacion && !bloqueada; if (!ok) irAlError(e.motivo ? "can-motivo" : e.observacion ? "can-observacion" : ""); return ok; } }}
       pie={<>
         <button type="button" className="btn btn-secondary !py-2" onClick={onClose} data-volver-cancelacion>Volver</button>
         <button form="f-cancelar" className="btn !py-2 bg-acento text-white hover:bg-acento-600 disabled:opacity-60" disabled={Boolean(enviando) || bloqueada} data-confirmar-cancelacion>{enviando || titulo}</button>

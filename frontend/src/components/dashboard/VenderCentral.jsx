@@ -769,7 +769,7 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
   // HU-032: entrega efectiva de esta venta (la preparación y la ubicación se revisan en el servidor). Al vendedor que
   // no es su responsable el servidor no se la muestra: no se consulta.
   const verEntrega = Boolean(vta && E.puedeVerEntrega(user, vta));
-  const prepClave = `${unidad?.preparacion?.estado || ""}|${unidad?.ubicacion?.codubi || ""}|${unidad?.movimiento_activo?.estado || ""}|${vta?.techo?.decision || ""}`;
+  const prepClave = `${unidad?.preparacion?.estado || ""}|${unidad?.preparacion?.armado || ""}|${unidad?.ubicacion?.codubi || ""}|${unidad?.movimiento_activo?.estado || ""}|${vta?.techo?.decision || ""}`;
   const entrega = useConsultaCentral(() => E.entregaDeVentaApi(vta.codven), [vta?.codven, version, prepClave], { activo: Boolean(activo && vta?.codven && verEntrega), intervalo: 20000, clave: `entrega:${vta?.codven}` });
   // Vendida sin venta vigente: su venta se canceló después de entregarla (la moto espera el retorno; PO 16/11)
   const sinVigente = activo && !vta && !consulta.cargando && !consulta.error && consulta.data === null;

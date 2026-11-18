@@ -85,7 +85,7 @@ export function EntregaVenta({ venta, unidad, consulta, puedeEditar = true, onCa
           <dl className="mt-2 text-[13.5px]">
             <Dato k="Entrega acordada" data="acordada">{textoModalidad(est.modalidadAcordada, est.sedeAcordada)}</Dato>
             <Dato k="Ubicación de la moto" data="ubicacion">{est.ubicacionActual?.sede || (unidad?.ubicacion?.nomubi ? `${unidad.ubicacion.nomubi} (no es una sede de entrega)` : "Sin ubicación registrada")}</Dato>
-            {est.preparacion && <Dato k="Preparación" data="preparacion">{`Armado: ${String(est.preparacion.armado || "Sin dato").toLowerCase()} · techo: ${String(est.preparacion.techo || "Sin dato").toLowerCase()}`}</Dato>}
+            {est.preparacion && <Dato k="Preparación" data="preparacion">{`Armado: ${String(est.preparacion.armado || "Sin dato").toLowerCase()} · techo: ${est.decisionTecho === S.SIN_TECHO && est.preparacion.techo !== "Instalado" ? "no lleva (sin techo)" : String(est.preparacion.techo || "Sin dato").toLowerCase()}`}</Dato>}
             {est.decisionTecho && <Dato k="Techo acordado" data="techo">{est.decisionTecho === S.CON_TECHO && venta.techoNombre ? `Con techo: ${venta.techoNombre}` : est.decisionTecho}</Dato>}
           </dl>
           {faltan.length > 0 ? (
@@ -93,6 +93,7 @@ export function EntregaVenta({ venta, unidad, consulta, puedeEditar = true, onCa
               <p className="font-semibold">Falta para entregar:</p>
               <ul className="mt-1 list-disc space-y-0.5 pl-5">{faltan.map((x) => <li key={x}>{x}</li>)}</ul>
               {porDefinir && <p className="mt-1">Primero registra el techo que eligió el comprador con «Elegir techo».</p>}
+              {faltan.some((x) => /armado/i.test(x)) && <p className="mt-1" data-ayuda-armado>El armado se registra en «Preparación», en esta misma ficha (gerencia o administración).</p>}
             </div>
           ) : E.lista(est) ? (
             <p className="mt-2 text-[13px] text-emerald-700 dark:text-emerald-300" data-entrega-lista>{est.estado === E.LISTA_EMBALADA ? "Cumple lo acordado para entregarla embalada: recibida en la sede acordada. La entrega no la marca como armada." : "Cumple lo acordado: está en la sede acordada, armada y con el techo pactado."}</p>
