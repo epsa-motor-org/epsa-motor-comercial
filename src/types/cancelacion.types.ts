@@ -1,3 +1,6 @@
+import type { EntregaRegistrada } from './entrega.types';
+import type { RetornoRegistrado } from './retorno.types';
+
 export interface CancelarOperacionRequest {
   motivo: string;
   observacionDinero?: string | null;
@@ -57,6 +60,10 @@ export interface CancelacionConsulta {
   estadoAnterior: string;
   estadoResultante: 'Cancelada';
   estadoComercialResultante: 'Disponible' | 'Separada' | 'Vendida';
+  entrega?: EntregaRegistrada | null;
+  retorno?: RetornoRegistrado | null;
+  estadoComercialUnidad?: 'Disponible' | 'Separada' | 'Vendida';
+  ubicacionActual?: { codubi: string; nombre: string; tipo: string } | null;
 }
 
 export interface ErrorCancelacionBD {
