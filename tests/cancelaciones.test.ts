@@ -107,6 +107,19 @@ test('HU-021 HTTP: vendedor ajeno es rechazado por la RPC y errores de negocio n
   });
 });
 
+test('HU-021 CP-021-02 HTTP: vendedor ajeno al responsable vigente no puede cancelar la venta', async () => {
+  await entorno(async (base, llamadas) => {
+    const response = await request(base, '/api/ventas/82/cancelacion', 'vendedor');
+    assert.equal(response.status, 403);
+    assert.equal(response.body.message, 'El vendedor no es el responsable comercial vigente de esta operación');
+    assert.equal(llamadas.length, 1);
+    assert.equal(llamadas[0]!.name, 'hu021_cancelar_venta');
+    assert.equal(llamadas[0]!.token, 'vendedor');
+  }, name => name === 'hu021_cancelar_venta'
+    ? { data: null, error: { code: 'PT652', message: 'detalle SQL privado' } }
+    : null);
+});
+
 test('HU-021 HTTP: consulta log sanitizado por ambas rutas y con clave de operación', async () => {
   const log = {
     tipoOperacion: 'Separacion', codOperacion: '71', accion: 'Cancelacion',

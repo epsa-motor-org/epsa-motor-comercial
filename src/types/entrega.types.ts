@@ -1,3 +1,5 @@
+import type { RetornoRegistrado } from './retorno.types';
+
 export type ModalidadEntrega = 'Armada' | 'Embalada';
 
 export interface RegistrarEntregaRequest {
@@ -61,13 +63,15 @@ export interface EstadoEntregaResultado {
   coduni: string;
   codcli: string;
   estadoVenta: string;
-  estado: 'Vendida pendiente de entrega' | 'Lista para entrega' | 'Lista para entrega embalada' | 'Entregada' | 'Venta cancelada';
+  estado: 'Vendida pendiente de entrega' | 'Lista para entrega' | 'Lista para entrega embalada' | 'Entregada' | 'Venta cancelada' | 'Retornada';
   modalidadAcordada?: ModalidadEntrega | null;
   sedeAcordada?: SedeEntrega | null;
-  ubicacionActual?: { codubi: string; sede: string } | null;
+  ubicacionActual?: { codubi: string; sede?: string; nombre?: string; tipo?: string } | null;
   decisionTecho?: string | null;
   preparacion?: CondicionesPreparacionEntrega | null;
   entrega: EntregaRegistrada | null;
+  retorno?: RetornoRegistrado | null;
+  estadoComercialUnidad?: 'Disponible' | 'Separada' | 'Vendida';
   condicionesFaltantes: string[];
 }
 

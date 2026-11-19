@@ -137,6 +137,15 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     [codven, coduni, codcli, modalidad, opciones.fecha ?? '2026-11-14', opciones.receptor ?? 'Persona receptora QA',
       opciones.observacion ?? null, opciones.pendientes ?? false, opciones.observacionDocumentos ?? null,
       opciones.referenciaGuia ?? null, opciones.clave ?? claveNueva()]);
+  const registrarRetorno = (
+    codven: string, opciones: Partial<{ fecha: string | null; codubi: string; condicion: string | null;
+      observacion: string | null; clave: string }> = {}
+  ) => escalar<Record<string, unknown>>(
+    'SELECT public.hu021_registrar_retorno($1,$2::date,$3,$4,$5,$6::uuid) r',
+    [codven, opciones.fecha === undefined ? '2026-11-18' : opciones.fecha,
+      opciones.codubi ?? '2', opciones.condicion === undefined ? 'Sin daños visibles' : opciones.condicion,
+      opciones.observacion === undefined ? 'Retorno recibido en sede' : opciones.observacion,
+      opciones.clave ?? claveNueva()]);
   const prepararUnidadEntrega = (
     coduni: string, opciones: Partial<{ codubi: string; codtte: string | null; armado: string; techo: string }> = {}
   ) => propietario(async () => {
@@ -319,6 +328,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await db.exec(leer('supabase/migrations/202611150003_hu032_entrega_moto_vendida.sql'));
     // El historial canónico debe poder reconstruirse también si el runner la reintenta.
     await db.exec(leer('supabase/migrations/202611150003_hu032_entrega_moto_vendida.sql'));
+    await db.exec(leer('supabase/migrations/202611190001_hu021_retorno_fisico.sql'));
   } catch (error) {
     await db.exec('ROLLBACK');
     throw new Error(`HU-032 migration failed: ${(error as Error).message} ${JSON.stringify(error)}`);
@@ -1822,5 +1832,181 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     assert.equal((await registrarEntrega(
       ventaEmbaladaSinTecho.codven, unidadEmbalada, '1', 'Embalada'
     )).conflicto, false);
+  });
+
+  await t.test('HU-021: retorno real conserva entrega, cancelación, finanzas y preparación; habilita reventa y segunda entrega', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(1);
+    const venta1 = await crearVentaConAcuerdoEntrega(unidad, 'Armada');
+    await prepararUnidadEntrega(unidad, { codubi: '2', armado: 'Terminado', techo: 'No requiere' });
+    await login(3);
+    const entrega1 = await registrarEntrega(venta1.codven, unidad, '1', 'Armada');
+    assert.equal(entrega1.conflicto, false);
+    await login(1);
+    const cancelacion = await cancelarVentaHU021(venta1.codven, 'Cancelación posterior a entrega', null);
+    assert.equal(cancelacion.unidadLiberada, false);
+    assert.equal(await estadoComercialHU021(unidad), 'Vendida');
+
+    const antes = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object(
+        'codubi',u.codubi::text,'codtte',u.codtte::text,
+        'preparacion',(SELECT pg_catalog.to_jsonb(p)-'coduni' FROM public.preparacionunidad p WHERE p.coduni=u.coduni),
+        'importe',v.impven,'base',v.prebaseven,'adicional',v.adicionalacordadoven,'descuento',v.descuentoven,
+        'pagos',(SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p)-'codven'),'[]'::jsonb)
+          FROM public.pagoventa p WHERE p.codven=v.codven),
+        'estadoVenta',v.estven,
+        'cancelaciones',(SELECT count(*)::int FROM public.historialcancelacion h WHERE h.codven=v.codven),
+        'entregas',(SELECT count(*)::int FROM public.hu032_entrega e WHERE e.codven=v.codven)) r
+       FROM public.unidad u JOIN public.venta v ON v.coduni=u.coduni WHERE v.codven=$1`, [venta1.codven]));
+    assert.equal(antes.estadoVenta, 'Cancelada');
+    assert.equal(antes.entregas, 1);
+    assert.equal(antes.cancelaciones, 1);
+
+    const key = claveNueva();
+    const retorno = await registrarRetorno(venta1.codven, { clave: key });
+    assert.equal(retorno.estado, 'Retornada');
+    assert.equal(retorno.estadoComercialUnidad, 'Disponible');
+    assert.equal(retorno.reutilizada, false);
+    const eventoRetorno = retorno.retorno as Record<string, unknown>;
+    assert.equal(eventoRetorno.fechaRetorno, '2026-11-18');
+    assert.equal(eventoRetorno.estadoComercialResultante, 'Disponible');
+    assert.equal((eventoRetorno.registradoPor as Record<string, unknown>).codusu, '1');
+    assert.equal((eventoRetorno.ubicacion as Record<string, unknown>).codubi, '2');
+    assert.equal(await estadoComercialHU021(unidad), 'Disponible');
+    const despues = await propietario(() => escalar<Record<string, unknown>>(
+      `SELECT jsonb_build_object(
+        'codubi',u.codubi::text,'codtte',u.codtte::text,
+        'preparacion',(SELECT pg_catalog.to_jsonb(p)-'coduni' FROM public.preparacionunidad p WHERE p.coduni=u.coduni),
+        'importe',v.impven,'base',v.prebaseven,'adicional',v.adicionalacordadoven,'descuento',v.descuentoven,
+        'pagos',(SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(p)-'codven'),'[]'::jsonb)
+          FROM public.pagoventa p WHERE p.codven=v.codven),
+        'estadoVenta',v.estven,
+        'cancelaciones',(SELECT count(*)::int FROM public.historialcancelacion h WHERE h.codven=v.codven),
+        'entregas',(SELECT count(*)::int FROM public.hu032_entrega e WHERE e.codven=v.codven),
+        'retornos',(SELECT count(*)::int FROM public.hu021_retorno r WHERE r.codven=v.codven)) r
+       FROM public.unidad u JOIN public.venta v ON v.coduni=u.coduni WHERE v.codven=$1`, [venta1.codven]));
+    assert.deepEqual(despues, { ...antes, codubi: '2', retornos: 1 },
+      'el retorno solo cambia la ubicación y el estado comercial; no altera la venta, dinero, cancelación, entrega ni preparación/techo');
+
+    const consultaEntrega = await escalar<Record<string, unknown>>(
+      'SELECT public.hu032_consultar_entrega($1) r', [venta1.codven]);
+    assert.equal(consultaEntrega.estado, 'Retornada');
+    assert.equal(consultaEntrega.estadoVenta, 'Cancelada');
+    assert.ok(consultaEntrega.entrega, 'la entrega histórica continúa visible');
+    assert.ok(consultaEntrega.retorno, 'la consulta expone el retorno');
+    assert.equal(consultaEntrega.estadoComercialUnidad, 'Disponible');
+    assert.equal((consultaEntrega.ubicacionActual as Record<string, unknown>).codubi, '2');
+    const consultaCancelacion = await escalar<Record<string, unknown>>(
+      'SELECT public.hu021_consultar_cancelacion_venta($1) r', [venta1.codven]);
+    assert.ok(consultaCancelacion.entrega);
+    assert.ok(consultaCancelacion.retorno);
+    assert.equal(consultaCancelacion.estadoComercialUnidad, 'Disponible');
+
+    const replay = await registrarRetorno(venta1.codven, { clave: key });
+    assert.equal(replay.reutilizada, true);
+    assert.equal((replay.retorno as Record<string, unknown>).codretorno, eventoRetorno.codretorno);
+    await assert.rejects(registrarRetorno(venta1.codven, { clave: key, observacion: 'Payload distinto' }), error('PT704'));
+    await assert.rejects(registrarRetorno(venta1.codven, { clave: key, codubi: '999999' }), error('PT704'),
+      'la clave se compara antes de revalidar una ubicación modificada');
+    await assert.rejects(registrarRetorno(venta1.codven), error('PT705'));
+    assert.equal(await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu021_retorno WHERE codven=$1', [venta1.codven])), 1);
+    await assert.rejects(db.query('SELECT * FROM public.hu021_retorno'), error('42501'),
+      'authenticated no puede leer directamente la tabla de retornos');
+    await db.exec('RESET ROLE; SET ROLE anon');
+    await assert.rejects(db.query('SELECT * FROM public.hu021_retorno'), error('42501'),
+      'anon tampoco puede leer directamente la tabla de retornos');
+    await login(1);
+    await assert.rejects(propietario(() => db.query(
+      "UPDATE public.hu021_retorno SET observacion='edición no permitida' WHERE codven=$1", [venta1.codven]
+    )), error('42501'), 'el evento de retorno es append-only');
+
+    await login(1);
+    const venta2 = await crearVentaConAcuerdoEntrega(unidad, 'Armada');
+    await prepararUnidadEntrega(unidad, { codubi: '2', armado: 'Terminado', techo: 'No requiere' });
+    await login(3);
+    const entrega2 = await registrarEntrega(venta2.codven, unidad, '1', 'Armada');
+    assert.equal(entrega2.conflicto, false, 'se permite entregar una reventa sin borrar la entrega histórica anterior');
+    assert.equal(await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu032_entrega WHERE coduni=$1', [unidad])), 2);
+    const consultaVenta1 = await escalar<Record<string, unknown>>(
+      'SELECT public.hu032_consultar_entrega($1) r', [venta1.codven]);
+    assert.equal(consultaVenta1.estado, 'Retornada');
+    assert.equal(consultaVenta1.estadoComercialUnidad, 'Vendida',
+      'la proyección conserva el retorno histórico y muestra el compromiso comercial actual');
+  });
+
+  await t.test('HU-021: permisos, estados, datos inválidos e idempotencia del retorno se validan en PostgreSQL', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(1);
+    const ventaActiva = await crearVentaConAcuerdoEntrega(unidad, 'Embalada');
+    await prepararUnidadEntrega(unidad, { codubi: '2' });
+    await assert.rejects(registrarRetorno(ventaActiva.codven), error('PT703'), 'una venta todavía activa no se retorna');
+    await cancelarVentaHU021(ventaActiva.codven, 'Cancelada sin entrega', null);
+    await assert.rejects(registrarRetorno(ventaActiva.codven), error('PT703'), 'cancelación sin entrega no acredita retorno');
+    await assert.rejects(registrarRetorno('999999'), error('PT702'), 'venta inexistente');
+    await assert.rejects(registrarRetorno(ventaActiva.codven, { fecha: null }), error('PT701'));
+    await assert.rejects(registrarRetorno(ventaActiva.codven, { condicion: '  ' }), error('PT701'));
+    await assert.rejects(registrarRetorno(ventaActiva.codven, { observacion: null }), error('PT701'));
+    const ventaEntregada = await crearVentaConAcuerdoEntrega(unidad, 'Embalada');
+    const entrega = await registrarEntrega(ventaEntregada.codven, unidad, '1', 'Embalada');
+    assert.equal(entrega.conflicto, false);
+    await cancelarVentaHU021(ventaEntregada.codven, 'Cancelada después de entrega', null);
+    const almacenActivo = await propietario(() => escalar<string>(
+      "SELECT codubi::text r FROM public.ubicacion WHERE tipubi='Almacen' AND estubi IS TRUE LIMIT 1"));
+    const proveedorActivo = await propietario(() => escalar<string>(
+      "SELECT codubi::text r FROM public.ubicacion WHERE tipubi='Proveedor' AND estubi IS TRUE LIMIT 1"));
+    const almacenInactivo = await propietario(() => escalar<string>(
+      "INSERT INTO public.ubicacion(nomubi,tipubi,estubi) VALUES ('HU021 Retorno Inactivo QA','Almacen',false) RETURNING codubi::text r"));
+    assert.ok(almacenActivo);
+    assert.ok(proveedorActivo);
+    await assert.rejects(registrarRetorno(ventaEntregada.codven, { codubi: proveedorActivo }), error('PT701'),
+      'una ubicación Proveedor no es una ubicación EPSA para retornar la unidad');
+    await assert.rejects(registrarRetorno(ventaEntregada.codven, { codubi: almacenInactivo }), error('PT701'),
+      'un Almacen inactivo no es válido para el retorno');
+    await assert.rejects(registrarRetorno(ventaEntregada.codven, { codubi: '999999' }), error('PT701'),
+      'una ubicación inexistente no es válida para retorno');
+    await login(2);
+    await assert.rejects(registrarRetorno(ventaEntregada.codven), error('42501'), 'Administradora no puede registrar retorno');
+    await login(3);
+    await assert.rejects(registrarRetorno(ventaEntregada.codven), error('42501'), 'Vendedor no puede registrar retorno');
+    await db.exec('RESET ROLE; SET ROLE anon');
+    await assert.rejects(registrarRetorno(ventaEntregada.codven), error('42501'), 'anon no puede ejecutar la RPC');
+    await login(1);
+    const resultado = await registrarRetorno(ventaEntregada.codven, { codubi: almacenActivo });
+    assert.equal(resultado.estado, 'Retornada');
+    assert.equal((resultado.ubicacionActual as Record<string, unknown>).codubi, almacenActivo,
+      'un Almacen activo también se acepta como ubicación física de retorno');
+    assert.equal(((resultado.retorno as Record<string, unknown>).ubicacion as Record<string, unknown>).tipo, 'Almacen');
+  });
+
+  await t.test('HU-021: retorno conserva estado Separada si existe otra separación activa', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(1);
+    const venta = await crearVentaConAcuerdoEntrega(unidad, 'Embalada');
+    await prepararUnidadEntrega(unidad, { codubi: '2' });
+    await registrarEntrega(venta.codven, unidad, '1', 'Embalada');
+    await cancelarVentaHU021(venta.codven, 'Cancelada después de entrega', null);
+    await crearSeparacionComercialResidualHU021(unidad);
+    const resultado = await registrarRetorno(venta.codven);
+    assert.equal(resultado.estadoComercialUnidad, 'Separada');
+    assert.equal(await estadoComercialHU021(unidad), 'Separada');
+  });
+
+  await t.test('HU-021: solicitudes locales simultáneas de retorno no duplican el evento (PGlite, una sesión)', async () => {
+    const unidad = await crearUnidadHU021();
+    await login(1);
+    const venta = await crearVentaConAcuerdoEntrega(unidad, 'Embalada');
+    await prepararUnidadEntrega(unidad, { codubi: '2' });
+    await registrarEntrega(venta.codven, unidad, '1', 'Embalada');
+    await cancelarVentaHU021(venta.codven, 'Cancelada para retorno', null);
+    const intentos = await Promise.allSettled([
+      registrarRetorno(venta.codven), registrarRetorno(venta.codven)
+    ]);
+    assert.equal(intentos.filter(item => item.status === 'fulfilled').length, 1);
+    const fallido = intentos.find(item => item.status === 'rejected') as PromiseRejectedResult;
+    assert.equal((fallido.reason as ErrorSQL).code, 'PT705');
+    assert.equal(await propietario(() => escalar<number>(
+      'SELECT count(*)::int r FROM public.hu021_retorno WHERE codven=$1', [venta.codven])), 1);
   });
 });

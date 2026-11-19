@@ -12,6 +12,7 @@ import {
   previsualizarCorreccionVenta, previsualizarIntercambioVentas
 } from '../controllers/venta.correccion.controller';
 import { consultarEntrega, registrarEntrega } from '../controllers/entrega.controller';
+import { registrarRetorno } from '../controllers/retorno.controller';
 
 const ROLES_VENTA = ['Gerente', 'Administradora', 'Vendedor'] as const;
 
@@ -36,6 +37,7 @@ export function crearRutasTechoVenta(fabrica?: FabricaCliente) {
   router.put('/:codven/comprobante', autenticar(fabrica), exigirRoles(...ROLES_VENTA), guardarComprobanteVenta);
   router.get('/:codven/entrega', autenticar(fabrica), exigirRoles(...ROLES_VENTA), consultarEntrega);
   router.post('/:codven/entrega', autenticar(fabrica), exigirRoles(...ROLES_VENTA), registrarEntrega);
+  router.post('/:codven/retorno', autenticar(fabrica), exigirRoles('Gerente'), registrarRetorno);
   router.post('/:codven/cancelacion', autenticar(fabrica), exigirRoles(...ROLES_VENTA), cancelarVenta);
   router.get('/:codven/cancelacion', autenticar(fabrica), exigirRoles(...ROLES_VENTA), consultarCancelacionVenta);
   return router;
