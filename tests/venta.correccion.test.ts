@@ -6,7 +6,7 @@ import { crearApp } from '../src/app';
 
 interface Perfil { codusu: string; uuidusu: string; rol: 'Gerente' | 'Administradora' | 'Vendedor' }
 interface Llamada { nombre: string; parametros: Record<string, unknown>; token: string }
-interface ErrorRPC { code?: string; message?: string }
+interface ErrorRPC { code?: string; message?: string; details?: string; hint?: string }
 interface Respuesta { status: number; body: { ok?: boolean; message?: string; data?: unknown } }
 type Resolver = (nombre: string, parametros: Record<string, unknown>, token: string) =>
   { data: unknown; error: ErrorRPC | null } | null;
@@ -135,34 +135,65 @@ test('HU-022 HTTP: consulta el historial de correcciones mediante una RPC saniti
   ? { data: [], error: null }
   : null));
 
-test('HU-022 HTTP: PT687, PT693 y PT438 distinguen idempotencia y los dos conflictos de techo', async () => {
+test('HU-022 HTTP: conflictos conocidos conservan 409 y los desconocidos siguen en 500 genérico', async () => {
   let errorCode = 'PT683';
-  await entorno(async (base) => {
-  const errorRespuesta = async (code: string) => {
-    errorCode = code;
-    return leer(fetch(`${base}/api/ventas/77/correccion-relacion`, {
-      method: 'POST', headers: { Authorization: 'Bearer gerente', 'Content-Type': 'application/json', 'Idempotency-Key': KEY },
-      body: JSON.stringify({ motivo: 'Motivo', versionEsperada: 1, codcliNuevo: 25 })
-    }));
-  };
-  assert.equal((await errorRespuesta('PT683')).status, 409);
-  assert.equal((await errorRespuesta('PT686')).status, 403);
+  const registros: string[] = [];
+  const consoleErrorOriginal = console.error;
+  console.error = (...args: unknown[]) => { registros.push(args.map(String).join(' ')); };
+  try {
+    await entorno(async (base) => {
+      const errorRespuesta = async (code: string) => {
+        errorCode = code;
+        return leer(fetch(`${base}/api/ventas/77/correccion-relacion`, {
+          method: 'POST', headers: { Authorization: 'Bearer gerente', 'Content-Type': 'application/json', 'Idempotency-Key': KEY },
+          body: JSON.stringify({ motivo: 'Motivo', versionEsperada: 1, codcliNuevo: 25 })
+        }));
+      };
+      for (const code of ['PT683', 'PT685', 'PT700', '40001', '40P01'])
+        assert.equal((await errorRespuesta(code)).status, 409, `${code} debe ser conflicto`);
+      assert.equal((await errorRespuesta('PT686')).status, 403);
+      assert.equal((await errorRespuesta('PT687')).status, 409);
+      assert.equal((await errorRespuesta('PT693')).status, 409);
+      assert.equal((await errorRespuesta('PT438')).status, 409);
+      assert.equal((await errorRespuesta('PT692')).status, 409);
+      assert.equal((await errorRespuesta('23505')).status, 409);
 
-  const idempotencia = await errorRespuesta('PT687');
-  assert.equal(idempotencia.status, 409);
-  assert.equal(idempotencia.body.message, 'Idempotency-Key ya fue usada con otra corrección');
+      const desconocido = await errorRespuesta('P0001');
+      assert.equal(desconocido.status, 500);
+      assert.equal(desconocido.body.message, 'Error interno al procesar la venta');
+    }, nombre => nombre === 'hu022_corregir_venta' ? {
+      data: null,
+      error: { code: errorCode, message: 'mensaje privado', details: 'detalle privado', hint: 'pista privada' }
+    } : null);
+  } finally {
+    console.error = consoleErrorOriginal;
+  }
+  assert.deepEqual(registros, ['PT683', 'PT685', 'PT700', '40001', '40P01', 'PT686', 'PT687', 'PT693', 'PT438', 'PT692', '23505', 'P0001']
+    .map(code => `HU022 error rpc=hu022_corregir_venta code=${code}`));
+  assert.equal(registros.join('\n').includes('privado'), false, 'no debe registrar message/details/hint');
+});
 
-  const configuracionTecho = await errorRespuesta('PT693');
-  assert.equal(configuracionTecho.status, 409);
-  assert.equal(configuracionTecho.body.message, 'La configuración de techo de la unidad destino contradice el acuerdo de la venta');
-
-  const techoInstalado = await errorRespuesta('PT438');
-  assert.equal(techoInstalado.status, 409);
-  assert.equal(techoInstalado.body.message, 'La unidad destino tiene un techo instalado incompatible con el acuerdo de la venta');
-
-  assert.equal((await errorRespuesta('PT692')).status, 409);
-  assert.equal((await errorRespuesta('23505')).status, 409);
-  assert.equal((await errorRespuesta('40001')).status, 409);
-  assert.equal((await errorRespuesta('40P01')).status, 409);
-  }, nombre => nombre === 'hu022_corregir_venta' ? { data: null, error: { code: errorCode } } : null);
+test('HU-022 HTTP: el intercambio registra únicamente RPC y código sanitizado', async () => {
+  const registros: string[] = [];
+  const consoleErrorOriginal = console.error;
+  console.error = (...args: unknown[]) => { registros.push(args.map(String).join(' ')); };
+  try {
+    await entorno(async base => {
+      const response = await leer(fetch(`${base}/api/ventas/correccion-relacion/intercambio`, {
+        method: 'POST', headers: { Authorization: 'Bearer gerente', 'Content-Type': 'application/json', 'Idempotency-Key': KEY },
+        body: JSON.stringify({ motivo: 'Motivo', operaciones: [
+          { codven: 101, versionEsperada: 1, coduniNuevo: 41 },
+          { codven: 102, versionEsperada: 1, coduniNuevo: 42 }
+        ] })
+      }));
+      assert.equal(response.status, 409);
+    }, nombre => nombre === 'hu022_intercambiar_ventas' ? {
+      data: null,
+      error: { code: 'PT700', message: 'mensaje privado', details: 'detalle privado', hint: 'pista privada' }
+    } : null);
+  } finally {
+    console.error = consoleErrorOriginal;
+  }
+  assert.deepEqual(registros, ['HU022 error rpc=hu022_intercambiar_ventas code=PT700']);
+  assert.equal(registros.join('\n').includes('privado'), false, 'no debe registrar message/details/hint');
 });
