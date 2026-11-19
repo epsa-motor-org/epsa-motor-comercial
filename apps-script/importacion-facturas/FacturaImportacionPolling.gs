@@ -19,6 +19,8 @@ function facturaImportacionLog(evento) {
     threadId: typeof evento.threadId === 'string' && /^[\x21-\x7e]{1,250}$/.test(evento.threadId) ? evento.threadId : null,
     estadoThread: ['Procesado', 'Pendiente', 'Revision', 'Error'].indexOf(evento.estadoThread) !== -1
       ? evento.estadoThread : null,
+    estadoAutenticacion: ['AUTORIZADO', 'EXCLUIDO', 'REVISION'].indexOf(evento.estadoAutenticacion) !== -1
+      ? evento.estadoAutenticacion : null,
     labelObjetivo: labelsPermitidas([evento.labelObjetivo])[0] || null,
     labelsAntes: labelsPermitidas(evento.labelsAntes),
     labelsDespues: labelsPermitidas(evento.labelsDespues),
@@ -178,11 +180,26 @@ function facturaImportacionClasificarAttachmentsMensaje(message) {
   return facturaImportacionClasificarAdjuntos(attachments);
 }
 
+function facturaImportacionRegistrarAutenticacion(messageId, result) {
+  facturaImportacionLog({
+    evento: 'AUTENTICACION_CORREO',
+    messageId: messageId,
+    estadoAutenticacion: result && result.estado,
+    code: result && result.motivo
+  });
+}
+
 function facturaImportacionProcesarMensaje(config, message, queue, states, attempted) {
   var messageId = message.getId();
-  var classified = facturaImportacionClasificarAttachmentsMensaje(message);
   var thread = message.getThread();
+  var authentication = facturaImportacionAutenticarMensaje(config, message);
+  facturaImportacionRegistrarAutenticacion(messageId, authentication);
+  if (!authentication.autorizado) {
+    if (authentication.estado === 'REVISION') facturaImportacionAgregarEstadoThread(states, thread, 'Revision', config.labels);
+    return { globalStop: false, handled: 0, excluded: authentication.estado === 'EXCLUIDO' };
+  }
   if (attempted[messageId + '|*']) return { globalStop: false, handled: 0 };
+  var classified = facturaImportacionClasificarAttachmentsMensaje(message);
   if (classified.xml.length === 0) {
     if (classified.pdf.length > 0 || classified.ambiguous.length > 0) {
       facturaImportacionAgregarEstadoThread(states, thread, 'Revision', config.labels);
@@ -261,6 +278,13 @@ function facturaImportacionRecuperarRetry(item, config, queue, states, attempted
     attempted[item.messageId + '|*'] = true;
     facturaImportacionLog({ evento: 'RETRY_MENSAJE_NO_DISPONIBLE', messageId: item.messageId, xmlSha256: item.sha256Xml });
     return { state: 'Revision', thread: thread };
+  }
+  var authentication = facturaImportacionAutenticarMensaje(config, message);
+  facturaImportacionRegistrarAutenticacion(item.messageId, authentication);
+  if (!authentication.autorizado) {
+    facturaImportacionReemplazarCola(queue, facturaImportacionEliminarItemCola(queue, item.messageId, item.sha256Xml));
+    attempted[item.messageId + '|*'] = true;
+    return { state: authentication.estado === 'REVISION' ? 'Revision' : null, thread: thread };
   }
   var classified = facturaImportacionClasificarAttachmentsMensaje(message);
   var matching = classified.xml.filter(function (entry) {

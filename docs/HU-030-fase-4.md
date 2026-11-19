@@ -4,7 +4,7 @@
 
 Esta carpeta contiene el cliente local para Gmail, firma HMAC, carga multipart, reintentos y etiquetas operacionales. No se instaló ni ejecutó un trigger, no se autorizó Gmail y no se llamó al backend. La HU no queda cerrada hasta completar un E2E aprobado y comprobar el trigger en el entorno autorizado.
 
-Render está configurado por el equipo para desplegar `60962083-tech/epsa-motor-comercial` desde `develop`. Este checkout continúa en `feature/HU-030-importacion-facturas` y los cambios HU-030 aún están locales y sin commit; por ello no se debe asumir que el despliegue actual contiene esta integración. Verificar el commit desplegado cuando los cambios se integren. No se ha confirmado aquí la configuración de variables HMAC en Render.
+Render está configurado por el equipo para desplegar `60962083-tech/epsa-motor-comercial` desde `develop`. Los cambios HU-030 de este checkout aún están locales y sin commit; por ello no se debe asumir que el despliegue actual contiene esta integración. Verificar el commit desplegado cuando los cambios se integren. No se ha confirmado aquí la configuración de variables HMAC en Render.
 
 El proceso está pensado para la cuenta dedicada `epsamotor.admin@gmail.com`. No usa la cuenta personal del dueño ni necesita una contraseña Google.
 
@@ -29,6 +29,8 @@ En **Project Settings → Script properties**, configurar valores aprobados para
 | `HU030_FECHA_CORTE_ISO` | Fecha/hora ISO 8601 con zona explícita. Obligatoria; no tiene default |
 | `HU030_ULTIMO_BARRIDO_ISO` | Cursor escrito por el script al completar un barrido |
 | `HU030_LOTE_MAX` | Máximo de threads por corrida; default 25, rango 1–100 |
+| `HU030_REMITENTES_AUTORIZADOS` | Lista separada por comas de direcciones exactas autorizadas; actualmente `fespinozac2@gmail.com`. No admite nombres visibles ni comodines |
+| `HU030_DOMINIOS_AUTENTICACION` | Lista separada por comas de dominios legítimos para DKIM/DMARC y que debe incluir el dominio de cada remitente autorizado; actualmente `gmail.com` |
 | `HU030_LABEL_PROCESADO` | Opcional; default `EPSA/HU030/Procesado` |
 | `HU030_LABEL_PENDIENTE` | Opcional; default `EPSA/HU030/Pendiente` |
 | `HU030_LABEL_REVISION` | Opcional; default `EPSA/HU030/Revision` |
@@ -38,13 +40,17 @@ En **Project Settings → Script properties**, configurar valores aprobados para
 
 Falta que el equipo despliegue/configure la credencial HMAC compatible en el backend. Las variables del backend que deberán revisarse antes de E2E son `HU030_HMAC_CURRENT_KEY_ID`, `HU030_HMAC_CURRENT_SECRET`, opcionalmente `HU030_HMAC_PREVIOUS_KEY_ID` y `HU030_HMAC_PREVIOUS_SECRET`, `HU030_HMAC_TOLERANCIA_SEGUNDOS` y `HU030_FACTURAS_BUCKET`. Este documento no contiene sus valores.
 
-Si falta URL, key ID, secreto o fecha de corte, la corrida se detiene. No hay URL ni fecha de producción codificadas.
+Si falta URL, key ID, secreto, fecha de corte, lista de remitentes o lista de dominios, la corrida se detiene con un motivo controlado. Una lista inválida también detiene la corrida; no hay fallback abierto ni remitente comodín. No hay URL ni fecha de producción codificadas.
 
 ## Polling, corte y lote
 
 El handler `procesarCorreosPendientes` toma `LockService.getScriptLock()` con `tryLock`; si ya existe otra ejecución, sale sin iniciar trabajo paralelo. Libera el lock en `finally`.
 
-La búsqueda Gmail es paginada y usa `has:attachment {filename:xml filename:pdf}` con una fecha gruesa anterior al límite. La búsqueda solo preselecciona threads: cada mensaje se filtra por fecha exacta, incluyendo el instante de corte y excluyendo mensajes posteriores al inicio de la corrida. No se exige remitente ni se excluyen labels. `From` no autoriza al emisor fiscal.
+La búsqueda Gmail es paginada y usa `has:attachment {filename:xml filename:pdf}`, un grupo `from:` construido desde la lista configurada y una fecha gruesa anterior al límite. Gmail solo preselecciona threads: cada mensaje de cada thread se filtra por fecha exacta y se autentica individualmente; el filtro de búsqueda nunca autoriza un mensaje. La dirección `From` debe coincidir exactamente con una dirección configurada. El nombre visible, asunto y presencia de adjuntos no otorgan autorización.
+
+Antes de `getAttachments()`, hashes, XML/PDF o backend, el script analiza solo la sección de cabeceras de `GmailMessage.getRawContent()`. Para evitar confiar en un header arbitrario del remitente, exige un único `Authentication-Results` cuyo identificador sea `mx.google.com`; si está ausente, es ambiguo o identifica otro servicio, el mensaje queda en `Revision`. También exige SPF `pass` con `smtp.mailfrom` igual al remitente autorizado, DKIM `pass` alineado a un dominio de `HU030_DOMINIOS_AUTENTICACION` y DMARC `pass` con `header.from` en esa misma lista. ARC no es obligatorio. Un remitente que no esté autorizado queda `EXCLUIDO`; una identidad aparente autorizada sin evidencia verificable queda `Revision` con un motivo controlado.
+
+La configuración actual es `HU030_REMITENTES_AUTORIZADOS=fespinozac2@gmail.com` y `HU030_DOMINIOS_AUTENTICACION=gmail.com`, confirmada por el PO. Para agregar otro remitente en el futuro, se debe aprobar su dirección exacta y dominio de autenticación, añadirlos a las Script Properties separadas por comas y verificar fixtures/cabeceras reales antes de habilitar el flujo. No se debe agregar `@gmail.com`, dominios comodín, nombres visibles ni coincidencias parciales.
 
 La primera corrida usa `HU030_FECHA_CORTE_ISO`. Luego se usa `HU030_ULTIMO_BARRIDO_ISO` menos 15 minutos de solapamiento; solo se guarda el nuevo cursor tras completar el barrido. Si hay más threads que el lote permitido, la corrida procesa el lote y deja el cursor sin avanzar para no saltarse mensajes. En un backlog sostenido mayor al lote, el orden/devuelta de Gmail puede hacer que una página anterior reaparezca; antes de activar el trigger se debe dimensionar `HU030_LOTE_MAX` y verificar el volumen. El estado local no agrega un cursor/persistencia de documentos porque la especificación limita la persistencia a último barrido y retries.
 
@@ -78,7 +84,7 @@ Las labels `Procesado`, `Pendiente`, `Revision` y `Error` son indicadores operac
 
 La persistencia permitida no incluye el estado individual de cada XML ya finalizado. Por eso, si se requiere recalcular automáticamente una label de atención antigua sin intervención humana, hace falta aprobar almacenamiento adicional de estado por documento; esta fase no lo incorpora.
 
-Los logs incluyen solo IDs de mensaje, prefijo de hash, HTTP status, código controlado, `codrec`, `coddoc`, intento y duración. No registran XML/PDF, seriales, secretos, firma, canonical, headers completos ni respuestas crudas.
+Los logs incluyen solo IDs de mensaje, estado y motivo controlado de autenticación, prefijo de hash, HTTP status, códigos controlados, `codrec`, `coddoc`, intento y duración. No registran remitente, XML/PDF, seriales, secretos, firma, canonical, cabeceras completas ni respuestas crudas.
 
 ## Scopes y triggers
 
