@@ -117,6 +117,168 @@ function validarEndpointFacturaImportacion(endpoint) {
   return normalized;
 }
 
+function facturaImportacionNormalizarEmail(value) {
+  if (typeof value !== 'string') return null;
+  var email = value.trim();
+  if (email.charAt(0) === '<' && email.charAt(email.length - 1) === '>') email = email.slice(1, -1).trim();
+  if (email.length > 254 || !/^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i.test(email)) return null;
+  return email.toLowerCase();
+}
+
+function facturaImportacionParsearListaConfiguracion(value, kind) {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  var items = value.split(/[,;\r\n]+/).map(function (item) { return item.trim(); });
+  if (items.length < 1 || items.length > 50 || items.some(function (item) { return !item; })) return null;
+  var normalized = [];
+  for (var index = 0; index < items.length; index += 1) {
+    var item = kind === 'email' ? facturaImportacionNormalizarEmail(items[index]) : items[index].toLowerCase().replace(/\.$/, '');
+    if (kind === 'domain' && (item.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(item))) item = null;
+    if (!item || normalized.indexOf(item) !== -1) return null;
+    normalized.push(item);
+  }
+  return normalized;
+}
+
+function facturaImportacionParsearCabeceras(rawContent) {
+  if (typeof rawContent !== 'string' || rawContent.length === 0) return null;
+  var separator = /\r?\n\r?\n/.exec(rawContent);
+  var rawHeaders = separator ? rawContent.slice(0, separator.index) : rawContent;
+  if (rawHeaders.length > 262144) return null;
+  var unfolded = rawHeaders.replace(/\r?\n[ \t]+/g, ' ');
+  var lines = unfolded.split(/\r?\n/);
+  var headers = {};
+  for (var index = 0; index < lines.length; index += 1) {
+    var match = /^([!-9;-~]+):[ \t]*(.*)$/.exec(lines[index]);
+    if (!match) return null;
+    var name = match[1].toLowerCase();
+    if (name === 'from' || name === 'authentication-results') {
+      if (!headers[name]) headers[name] = [];
+      headers[name].push(match[2].trim());
+    }
+  }
+  return headers;
+}
+
+function facturaImportacionEmailDeFrom(value) {
+  if (typeof value !== 'string') return null;
+  var trimmed = value.trim();
+  var openCount = (trimmed.match(/</g) || []).length;
+  var closeCount = (trimmed.match(/>/g) || []).length;
+  if (openCount === 1 && closeCount === 1) {
+    var match = /<([^<>]+)>/.exec(trimmed);
+    return match ? facturaImportacionNormalizarEmail(match[1]) : null;
+  }
+  if (openCount !== 0 || closeCount !== 0 || /[,;]/.test(trimmed)) return null;
+  return facturaImportacionNormalizarEmail(trimmed);
+}
+
+function facturaImportacionCamposResultadoAuth(segment) {
+  var fields = {};
+  var regex = /(?:^|\s)(smtp\.mailfrom|header\.d|header\.i|header\.from)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s;]+))/ig;
+  var match;
+  while ((match = regex.exec(segment)) !== null) fields[match[1].toLowerCase()] = match[2] || match[3] || match[4] || '';
+  return fields;
+}
+
+function facturaImportacionResultadosAuth(headerValue) {
+  if (typeof headerValue !== 'string') return null;
+  var segments = headerValue.split(';');
+  if (segments.length < 2 || segments[0].trim().toLowerCase() !== 'mx.google.com') return null;
+  var results = [];
+  for (var index = 1; index < segments.length; index += 1) {
+    var match = /^\s*(spf|dkim|dmarc)\s*=\s*([a-z][a-z0-9_-]*)\b(.*)$/i.exec(segments[index]);
+    if (match) results.push({ method: match[1].toLowerCase(), result: match[2].toLowerCase(), fields: facturaImportacionCamposResultadoAuth(match[3]) });
+  }
+  return results;
+}
+
+function facturaImportacionDominioAuth(value) {
+  if (typeof value !== 'string') return null;
+  var normalized = value.trim().toLowerCase().replace(/^<|>$/g, '').replace(/\.$/, '');
+  if (normalized.indexOf('@') !== -1) normalized = normalized.slice(normalized.lastIndexOf('@') + 1);
+  return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(normalized) ? normalized : null;
+}
+
+function facturaImportacionDominiosRemitentesConfigurados(senders, domains) {
+  return Array.isArray(senders) && senders.length > 0 && Array.isArray(domains) && domains.length > 0
+    && senders.every(function (sender) {
+      return typeof sender === 'string' && domains.indexOf(sender.slice(sender.lastIndexOf('@') + 1).toLowerCase()) !== -1;
+    });
+}
+
+function facturaImportacionAutenticarCabeceras(rawContent, config) {
+  if (!config || !Array.isArray(config.remitentesAutorizados) || !config.remitentesAutorizados.length
+    || !Array.isArray(config.dominiosAutenticacion) || !config.dominiosAutenticacion.length
+    || !facturaImportacionDominiosRemitentesConfigurados(config.remitentesAutorizados, config.dominiosAutenticacion)) {
+    return { autorizado: false, estado: 'REVISION', motivo: 'CONFIGURACION_AUTENTICACION_INCOMPLETA' };
+  }
+  var headers = facturaImportacionParsearCabeceras(rawContent);
+  if (!headers || !headers.from || headers.from.length !== 1) {
+    return { autorizado: false, estado: 'REVISION', motivo: 'REMITENTE_NO_VERIFICABLE' };
+  }
+  var sender = facturaImportacionEmailDeFrom(headers.from[0]);
+  if (!sender) return { autorizado: false, estado: 'REVISION', motivo: 'REMITENTE_NO_VERIFICABLE' };
+  if (config.remitentesAutorizados.indexOf(sender) === -1) {
+    return { autorizado: false, estado: 'EXCLUIDO', motivo: 'REMITENTE_NO_AUTORIZADO' };
+  }
+  var senderDomain = sender.slice(sender.lastIndexOf('@') + 1);
+  var authHeaders = headers['authentication-results'] || [];
+  if (authHeaders.length === 0) return { autorizado: false, estado: 'REVISION', motivo: 'AUTHENTICATION_RESULTS_AUSENTE' };
+  // Si hay más de un resultado, no es posible demostrar cuál fue agregado por el receptor.
+  if (authHeaders.length !== 1) return { autorizado: false, estado: 'REVISION', motivo: 'AUTHENTICATION_RESULTS_AMBIGUO' };
+  var authResults = facturaImportacionResultadosAuth(authHeaders[0]);
+  if (!authResults) return { autorizado: false, estado: 'REVISION', motivo: 'AUTHENTICATION_RESULTS_NO_CONFIABLE' };
+
+  var spf = authResults.filter(function (entry) { return entry.method === 'spf'; });
+  if (spf.length === 0) return { autorizado: false, estado: 'REVISION', motivo: 'SPF_AUSENTE' };
+  var spfValid = spf.some(function (entry) {
+    return entry.result === 'pass' && facturaImportacionNormalizarEmail(entry.fields['smtp.mailfrom']) === sender;
+  });
+  if (!spfValid) return { autorizado: false, estado: 'REVISION', motivo: 'SPF_INVALIDO' };
+
+  var dkim = authResults.filter(function (entry) { return entry.method === 'dkim'; });
+  if (dkim.length === 0) return { autorizado: false, estado: 'REVISION', motivo: 'DKIM_AUSENTE' };
+  var dkimValid = dkim.some(function (entry) {
+    if (entry.result !== 'pass') return false;
+    var domain = facturaImportacionDominioAuth(entry.fields['header.d'] || entry.fields['header.i']);
+    return domain !== null && config.dominiosAutenticacion.indexOf(domain) !== -1;
+  });
+  if (!dkimValid) return { autorizado: false, estado: 'REVISION', motivo: 'DKIM_INVALIDO' };
+
+  var dmarc = authResults.filter(function (entry) { return entry.method === 'dmarc'; });
+  if (dmarc.length === 0) return { autorizado: false, estado: 'REVISION', motivo: 'DMARC_AUSENTE' };
+  var dmarcValid = dmarc.some(function (entry) {
+    var domain = facturaImportacionDominioAuth(entry.fields['header.from']);
+    return entry.result === 'pass' && domain === senderDomain && config.dominiosAutenticacion.indexOf(domain) !== -1;
+  });
+  if (!dmarcValid) return { autorizado: false, estado: 'REVISION', motivo: 'DMARC_INVALIDO' };
+  return { autorizado: true, estado: 'AUTORIZADO', motivo: 'ORIGEN_AUTENTICADO' };
+}
+
+function facturaImportacionAutenticarMensaje(config, message) {
+  try {
+    if (!config || !Array.isArray(config.remitentesAutorizados) || !config.remitentesAutorizados.length
+      || !Array.isArray(config.dominiosAutenticacion) || !config.dominiosAutenticacion.length
+      || !facturaImportacionDominiosRemitentesConfigurados(config.remitentesAutorizados, config.dominiosAutenticacion)) {
+      return { autorizado: false, estado: 'REVISION', motivo: 'CONFIGURACION_AUTENTICACION_INCOMPLETA' };
+    }
+    if (!message || typeof message.getFrom !== 'function') {
+      return { autorizado: false, estado: 'REVISION', motivo: 'REMITENTE_NO_VERIFICABLE' };
+    }
+    var fromAddress = facturaImportacionEmailDeFrom(message.getFrom());
+    if (!fromAddress) return { autorizado: false, estado: 'REVISION', motivo: 'REMITENTE_NO_VERIFICABLE' };
+    if (config.remitentesAutorizados.indexOf(fromAddress) === -1) {
+      return { autorizado: false, estado: 'EXCLUIDO', motivo: 'REMITENTE_NO_AUTORIZADO' };
+    }
+    if (!message || typeof message.getRawContent !== 'function') {
+      return { autorizado: false, estado: 'REVISION', motivo: 'AUTHENTICATION_RESULTS_NO_VERIFICABLE' };
+    }
+    return facturaImportacionAutenticarCabeceras(message.getRawContent(), config);
+  } catch (_error) {
+    return { autorizado: false, estado: 'REVISION', motivo: 'AUTHENTICATION_RESULTS_NO_VERIFICABLE' };
+  }
+}
+
 function facturaImportacionLeerConfiguracion() {
   var scriptProperties = PropertiesService.getScriptProperties();
   var endpoint = validarEndpointFacturaImportacion(scriptProperties.getProperty('HU030_ENDPOINT_URL'));
@@ -129,6 +291,15 @@ function facturaImportacionLeerConfiguracion() {
     || /[\r\n\u0000-\u001f\u007f]/.test(secret)
     || unescape(encodeURIComponent(secret)).length < 32
     || cutoffMs === null) throw errorFacturaImportacion('CONFIGURACION_INCOMPLETA');
+
+  var remitentesAutorizados = facturaImportacionParsearListaConfiguracion(
+    scriptProperties.getProperty('HU030_REMITENTES_AUTORIZADOS'), 'email');
+  var dominiosAutenticacion = facturaImportacionParsearListaConfiguracion(
+    scriptProperties.getProperty('HU030_DOMINIOS_AUTENTICACION'), 'domain');
+  if (!remitentesAutorizados || !dominiosAutenticacion
+    || !facturaImportacionDominiosRemitentesConfigurados(remitentesAutorizados, dominiosAutenticacion)) {
+    throw errorFacturaImportacion('CONFIGURACION_AUTENTICACION_INCOMPLETA');
+  }
 
   var lastSweepIso = scriptProperties.getProperty('HU030_ULTIMO_BARRIDO_ISO');
   var lastSweepMs = lastSweepIso ? parsearIsoFacturaImportacion(lastSweepIso) : null;
@@ -161,6 +332,8 @@ function facturaImportacionLeerConfiguracion() {
     lastSweepIso: lastSweepIso || null,
     lastSweepMs: lastSweepMs,
     batchMax: batchMax,
+    remitentesAutorizados: remitentesAutorizados,
+    dominiosAutenticacion: dominiosAutenticacion,
     labels: labels
   };
 }
@@ -171,10 +344,11 @@ function facturaImportacionVentanaBarrido(config, nowMs) {
     : Math.max(config.cutoffMs, config.lastSweepMs - FACTURA_IMPORTACION_SOLAPAMIENTO_MS);
   var coarseDate = new Date(startMs - 24 * 60 * 60 * 1000);
   var dateText = Utilities.formatDate(coarseDate, 'America/Lima', 'yyyy/MM/dd');
+  var senderQuery = '{' + config.remitentesAutorizados.map(function (sender) { return 'from:' + sender; }).join(' ') + '}';
   return {
     startMs: startMs,
     endMs: nowMs === undefined ? Date.now() : nowMs,
-    gmailQuery: 'has:attachment {filename:xml filename:pdf} after:' + dateText
+    gmailQuery: 'has:attachment {filename:xml filename:pdf} ' + senderQuery + ' after:' + dateText
   };
 }
 

@@ -5,6 +5,13 @@ import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 
 const SECRET = 'local-test-factura-importacion-hmac-secret-32-bytes';
+const AUTHORIZED_SENDER = 'fespinozac2@gmail.com';
+const AUTHENTICATED_DOMAIN = 'gmail.com';
+const AUTHENTICATED_HEADERS = [
+  'From: "Cuenta Crosland" <fespinozac2@gmail.com>',
+  'Authentication-Results: mx.google.com; spf=pass smtp.mailfrom=fespinozac2@gmail.com;',
+  '\tdkim=pass header.i=@gmail.com; dmarc=pass header.from=gmail.com'
+].join('\r\n');
 const scripts = [
   'apps-script/importacion-facturas/FacturaImportacionCore.gs',
   'apps-script/importacion-facturas/FacturaImportacionPolling.gs',
@@ -118,6 +125,22 @@ function configure(runtime: ReturnType<typeof makeRuntime>) {
   runtime.scriptValues.set('HU030_HMAC_KEY_ID', 'local-test-key');
   runtime.scriptValues.set('HU030_FECHA_CORTE_ISO', '2026-10-01T00:00:00Z');
   runtime.scriptValues.set('HU030_HMAC_SECRET', SECRET);
+  runtime.scriptValues.set('HU030_REMITENTES_AUTORIZADOS', AUTHORIZED_SENDER);
+  runtime.scriptValues.set('HU030_DOMINIOS_AUTENTICACION', AUTHENTICATED_DOMAIN);
+}
+
+function clientConfig() {
+  return {
+    endpoint: 'https://example.invalid/api/integraciones/facturas',
+    keyId: 'local-test-key',
+    secret: SECRET,
+    remitentesAutorizados: [AUTHORIZED_SENDER],
+    dominiosAutenticacion: [AUTHENTICATED_DOMAIN],
+    labels: {
+      Procesado: 'EPSA/HU030/Procesado', Pendiente: 'EPSA/HU030/Pendiente',
+      Revision: 'EPSA/HU030/Revision', Error: 'EPSA/HU030/Error'
+    }
+  };
 }
 
 function thread(id: string, messages: any[], initialLabels: string[] = []) {
@@ -137,17 +160,44 @@ function thread(id: string, messages: any[], initialLabels: string[] = []) {
   };
 }
 
-function message(id: string, date: Date, attachments: unknown[], parentThread?: unknown) {
+function message(id: string, date: Date, attachments: unknown[], parentThread?: unknown, rawHeaders = AUTHENTICATED_HEADERS) {
+  let attachmentReads = 0;
+  let rawReads = 0;
+  const fromHeader = rawHeaders.split(/\r?\n/).find((line) => /^from:/i.test(line))?.replace(/^from:/i, '').trim() ?? '';
   return {
     getId: () => id,
     getDate: () => date,
     getThread: () => parentThread,
+    getFrom: () => fromHeader,
+    getRawContent: () => { rawReads += 1; return `${rawHeaders}\r\n\r\n`; },
     getAttachments: (options: Record<string, boolean>) => {
+      attachmentReads += 1;
       assert.equal(options.includeInlineImages, false);
       assert.equal(options.includeAttachments, true);
       return attachments;
-    }
+    },
+    get attachmentReadCount() { return attachmentReads; },
+    get rawReadCount() { return rawReads; }
   };
+}
+
+function authenticationHeaders(options: {
+  from?: string; authserv?: string; spf?: string; mailfrom?: string;
+  dkim?: string; dkimDomain?: string; dmarc?: string; fromDomain?: string;
+} = {}) {
+  const from = options.from ?? AUTHORIZED_SENDER;
+  const authserv = options.authserv ?? 'mx.google.com';
+  const spf = options.spf ?? 'pass';
+  const mailfrom = options.mailfrom ?? AUTHORIZED_SENDER;
+  const dkim = options.dkim ?? 'pass';
+  const dkimDomain = options.dkimDomain ?? '@gmail.com';
+  const dmarc = options.dmarc ?? 'pass';
+  const fromDomain = options.fromDomain ?? 'gmail.com';
+  return [
+    `From: "Cuenta de facturación" <${from}>`,
+    `Authentication-Results: ${authserv}; spf=${spf} smtp.mailfrom=${mailfrom};`,
+    `\tdkim=${dkim} header.i=${dkimDomain}; dmarc=${dmarc} header.from=${fromDomain}`
+  ].join('\r\n');
 }
 
 test('HU-030 Apps Script: SHA-256 conserva bytes signed y devuelve hex lowercase', () => {
@@ -164,11 +214,228 @@ test('HU-030 Apps Script: configuración incompleta falla cerrada y valida endpo
   const config = runtime.context.facturaImportacionLeerConfiguracion();
   assert.equal(config.batchMax, 25);
   assert.equal(config.secret, SECRET);
+  assert.deepEqual(Array.from(config.remitentesAutorizados), [AUTHORIZED_SENDER]);
+  assert.deepEqual(Array.from(config.dominiosAutenticacion), [AUTHENTICATED_DOMAIN]);
+  runtime.scriptValues.delete('HU030_REMITENTES_AUTORIZADOS');
+  assert.throws(() => runtime.context.facturaImportacionLeerConfiguracion(), /CONFIGURACION_AUTENTICACION_INCOMPLETA/);
+  runtime.scriptValues.set('HU030_REMITENTES_AUTORIZADOS', 'flavio <fespinozac2@gmail.com>');
+  assert.throws(() => runtime.context.facturaImportacionLeerConfiguracion(), /CONFIGURACION_AUTENTICACION_INCOMPLETA/);
+  runtime.scriptValues.set('HU030_REMITENTES_AUTORIZADOS', AUTHORIZED_SENDER);
+  runtime.scriptValues.set('HU030_DOMINIOS_AUTENTICACION', 'example.com');
+  assert.throws(() => runtime.context.facturaImportacionLeerConfiguracion(), /CONFIGURACION_AUTENTICACION_INCOMPLETA/);
+  runtime.scriptValues.set('HU030_DOMINIOS_AUTENTICACION', AUTHENTICATED_DOMAIN);
   runtime.scriptValues.set('HU030_LOTE_MAX', '101');
   assert.throws(() => runtime.context.facturaImportacionLeerConfiguracion(), /CONFIGURACION_LOTE_INVALIDA/);
   runtime.scriptValues.set('HU030_LOTE_MAX', '25');
   runtime.scriptValues.set('HU030_LABEL_ERROR', 'EPSA/HU030/Procesado');
   assert.throws(() => runtime.context.facturaImportacionLeerConfiguracion(), /CONFIGURACION_LABEL_DUPLICADA/);
+});
+
+test('HU-030 EMT-141: remitente autorizado y autenticación Gmail válida habilitan el flujo', () => {
+  const now = Date.now();
+  const parent = thread('auth-positive-thread', []);
+  const xml = blob([60, 120, 109, 108, 62], 'invoice.xml', 'application/xml');
+  const email = message('auth-positive-message', new Date(now - 1000), [xml], parent);
+  parent.getMessages = () => [email];
+  const runtime = makeRuntime({ search: () => [parent] });
+  configure(runtime);
+  runtime.scriptValues.set('HU030_FECHA_CORTE_ISO', new Date(now - 60_000).toISOString());
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(runtime.calls.length, 1);
+  assert.equal(email.attachmentReadCount, 1);
+  const event = runtime.logs.map((line) => JSON.parse(line)).find((entry) => entry.evento === 'AUTENTICACION_CORREO');
+  assert.equal(event.estadoAutenticacion, 'AUTORIZADO');
+  assert.equal(event.code, 'ORIGEN_AUTENTICADO');
+  assert.equal(JSON.stringify(event).includes('Authentication-Results'), false);
+});
+
+test('HU-030 EMT-141: remitente ajeno aunque parezca legítimo queda excluido antes de leer adjuntos', () => {
+  const now = Date.now();
+  const parent = thread('auth-foreign-thread', []);
+  const email = message('auth-foreign-message', new Date(now - 1000), [blob([60], 'invoice.xml', 'application/xml')], parent,
+    authenticationHeaders({ from: 'otro@gmail.com' }));
+  parent.getMessages = () => [email];
+  const runtime = makeRuntime({ search: () => [parent] });
+  configure(runtime);
+  runtime.scriptValues.set('HU030_FECHA_CORTE_ISO', new Date(now - 60_000).toISOString());
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(runtime.calls.length, 0);
+  assert.equal(email.attachmentReadCount, 0);
+  assert.equal(email.rawReadCount, 0);
+  assert.deepEqual(parent.currentLabels, []);
+  const event = runtime.logs.map((line) => JSON.parse(line)).find((entry) => entry.messageId === 'auth-foreign-message');
+  assert.equal(event.estadoAutenticacion, 'EXCLUIDO');
+  assert.equal(event.code, 'REMITENTE_NO_AUTORIZADO');
+});
+
+test('HU-030 EMT-141: From correcto con autenticación fallida va a revisión sin adjuntos ni backend', () => {
+  const now = Date.now();
+  const parent = thread('auth-invalid-thread', []);
+  const email = message('auth-invalid-message', new Date(now - 1000), [blob([60], 'invoice.xml', 'application/xml')], parent,
+    authenticationHeaders({ spf: 'fail' }));
+  parent.getMessages = () => [email];
+  const runtime = makeRuntime({ search: () => [parent] });
+  configure(runtime);
+  runtime.scriptValues.set('HU030_FECHA_CORTE_ISO', new Date(now - 60_000).toISOString());
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(runtime.calls.length, 0);
+  assert.equal(email.attachmentReadCount, 0);
+  assert.deepEqual(parent.currentLabels, ['EPSA/HU030/Revision']);
+  const event = runtime.logs.map((line) => JSON.parse(line)).find((entry) => entry.messageId === 'auth-invalid-message');
+  assert.equal(event.estadoAutenticacion, 'REVISION');
+  assert.equal(event.code, 'SPF_INVALIDO');
+});
+
+test('HU-030 EMT-141: thread mixto valida cada mensaje y solo procesa el remitente autenticado', () => {
+  const now = Date.now();
+  const parent = thread('auth-mixed-thread', []);
+  const valid = message('auth-mixed-valid', new Date(now - 3000), [blob([60, 1], 'allowed.xml', 'application/xml')], parent);
+  const foreign = message('auth-mixed-foreign', new Date(now - 2000), [blob([60, 2], 'foreign.xml', 'application/xml')], parent,
+    authenticationHeaders({ from: 'otro@gmail.com' }));
+  parent.getMessages = () => [valid, foreign];
+  const runtime = makeRuntime({ search: () => [parent] });
+  configure(runtime);
+  runtime.scriptValues.set('HU030_FECHA_CORTE_ISO', new Date(now - 60_000).toISOString());
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(runtime.calls.length, 1);
+  assert.equal((runtime.calls[0]?.request.headers as Record<string, string>)['X-EPSA-Message-Id'], 'auth-mixed-valid');
+  assert.equal(valid.attachmentReadCount, 1);
+  assert.equal(foreign.attachmentReadCount, 0);
+  const events = runtime.logs.map((line) => JSON.parse(line)).filter((entry) => entry.evento === 'AUTENTICACION_CORREO');
+  assert.deepEqual(events.map((entry) => [entry.messageId, entry.estadoAutenticacion]), [
+    ['auth-mixed-valid', 'AUTORIZADO'], ['auth-mixed-foreign', 'EXCLUIDO']
+  ]);
+});
+
+test('HU-030 EMT-141: mensaje autorizado solo con PDF queda en revisión sin llamar backend', () => {
+  const now = Date.now();
+  const parent = thread('auth-pdf-only-thread', []);
+  const email = message('auth-pdf-only-message', new Date(now - 1000), [blob([37, 80, 68, 70, 45], 'invoice.pdf', 'application/pdf')], parent);
+  parent.getMessages = () => [email];
+  const runtime = makeRuntime({ search: () => [parent] });
+  configure(runtime);
+  runtime.scriptValues.set('HU030_FECHA_CORTE_ISO', new Date(now - 60_000).toISOString());
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(email.attachmentReadCount, 1);
+  assert.equal(runtime.calls.length, 0);
+  assert.deepEqual(parent.currentLabels, ['EPSA/HU030/Revision']);
+});
+
+test('HU-030 EMT-141: XML inválido autenticado se envía al validador y queda en revisión ante 422', () => {
+  const now = Date.now();
+  const parent = thread('auth-invalid-xml-thread', []);
+  const email = message('auth-invalid-xml-message', new Date(now - 1000), [blob([60, 120, 109, 108, 62], 'invalid.xml', 'application/xml')], parent);
+  parent.getMessages = () => [email];
+  const runtime = makeRuntime({ search: () => [parent], fetch: () => response(422, { ok: false, code: 'VALIDACION_DOCUMENTAL_FALLIDA' }) });
+  configure(runtime);
+  runtime.scriptValues.set('HU030_FECHA_CORTE_ISO', new Date(now - 60_000).toISOString());
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(email.attachmentReadCount, 1);
+  assert.equal(runtime.calls.length, 1);
+  assert.deepEqual(parent.currentLabels, ['EPSA/HU030/Revision']);
+});
+
+test('HU-030 EMT-141: configuración de remitentes incompleta detiene la corrida antes de buscar Gmail', () => {
+  const runtime = makeRuntime({ search: () => { assert.fail('Gmail no debe consultarse con configuración incompleta'); return []; } });
+  configure(runtime);
+  runtime.scriptValues.delete('HU030_DOMINIOS_AUTENTICACION');
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(runtime.searchCount, 0);
+  assert.equal(runtime.calls.length, 0);
+  assert.equal(runtime.lockReleased, true);
+  const event = runtime.logs.map((line) => JSON.parse(line)).find((entry) => entry.evento === 'CONFIGURACION_AUTENTICACION_INCOMPLETA');
+  assert.ok(event);
+});
+
+test('HU-030 EMT-141: retry vuelve a validar origen y no reenvía cuando la autenticación ya no es válida', () => {
+  const now = Date.now();
+  const parent = thread('auth-retry-thread', []);
+  const email = message('auth-retry-message', new Date(now - 1000), [blob([60, 120, 109, 108], 'retry.xml', 'application/xml')], parent);
+  let rawHeaders = AUTHENTICATED_HEADERS;
+  email.getRawContent = () => `${rawHeaders}\r\n\r\n`;
+  parent.getMessages = () => [email];
+  let fetchCount = 0;
+  const runtime = makeRuntime({ search: () => [parent], fetch: () => {
+    fetchCount += 1;
+    return response(503, { ok: false });
+  } });
+  configure(runtime);
+  runtime.scriptValues.set('HU030_FECHA_CORTE_ISO', new Date(now - 60_000).toISOString());
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(runtime.calls.length, 1);
+  assert.equal(runtime.scriptValues.has('HU030_RETRY_QUEUE_JSON'), true);
+  const queued = JSON.parse(runtime.scriptValues.get('HU030_RETRY_QUEUE_JSON')!)[0];
+  queued.nextAttemptAt = new Date(Date.now() - 1000).toISOString();
+  runtime.scriptValues.set('HU030_RETRY_QUEUE_JSON', JSON.stringify([queued]));
+  rawHeaders = authenticationHeaders({ dkim: 'fail' });
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(fetchCount, 1);
+  assert.equal(email.attachmentReadCount, 1);
+  assert.equal(runtime.scriptValues.has('HU030_RETRY_QUEUE_JSON'), false);
+  assert.deepEqual(parent.currentLabels, ['EPSA/HU030/Revision']);
+});
+
+test('HU-030 EMT-141: lote mixto ignora mensajes irrelevantes y procesa el único mensaje legítimo', () => {
+  const now = Date.now();
+  const parent = thread('auth-batch-thread', []);
+  const irrelevant = message('auth-batch-foreign', new Date(now - 3000), [blob([1], 'nota.txt', 'text/plain')], parent,
+    authenticationHeaders({ from: 'ventas@gmail.com' }));
+  const valid = message('auth-batch-valid', new Date(now - 2000), [blob([60, 120], 'invoice.xml', 'application/xml')], parent);
+  parent.getMessages = () => [irrelevant, valid];
+  const runtime = makeRuntime({ search: () => [parent] });
+  configure(runtime);
+  runtime.scriptValues.set('HU030_FECHA_CORTE_ISO', new Date(now - 60_000).toISOString());
+  runtime.context.procesarCorreosPendientes();
+  assert.equal(runtime.calls.length, 1);
+  assert.equal((runtime.calls[0]?.request.headers as Record<string, string>)['X-EPSA-Message-Id'], 'auth-batch-valid');
+  assert.equal(irrelevant.attachmentReadCount, 0);
+  assert.equal(valid.attachmentReadCount, 1);
+});
+
+test('HU-030 EMT-141: parser trata cabeceras plegadas, duplicadas y falsificadas de forma cerrada', () => {
+  const runtime = makeRuntime();
+  const config = clientConfig();
+  const folded = runtime.context.facturaImportacionAutenticarCabeceras(`${AUTHENTICATED_HEADERS}\r\n\r\nbody`, config);
+  assert.equal(folded.autorizado, true);
+
+  const fakeOnly = runtime.context.facturaImportacionAutenticarCabeceras(
+    authenticationHeaders({ authserv: 'attacker.example' }), config);
+  assert.equal(fakeOnly.autorizado, false);
+  assert.equal(fakeOnly.motivo, 'AUTHENTICATION_RESULTS_NO_CONFIABLE');
+
+  const multiple = runtime.context.facturaImportacionAutenticarCabeceras(
+    `${AUTHENTICATED_HEADERS}\r\nAuthentication-Results: attacker.example; spf=pass smtp.mailfrom=${AUTHORIZED_SENDER};\r\n\r\nbody`, config);
+  assert.equal(multiple.autorizado, false);
+  assert.equal(multiple.motivo, 'AUTHENTICATION_RESULTS_AMBIGUO');
+
+  const forgedBeforeGoogle = runtime.context.facturaImportacionAutenticarCabeceras(
+    `From: ${AUTHORIZED_SENDER}\r\nAuthentication-Results: attacker.example; spf=pass smtp.mailfrom=${AUTHORIZED_SENDER};\r\nAuthentication-Results: mx.google.com; spf=pass smtp.mailfrom=${AUTHORIZED_SENDER}; dkim=pass header.d=gmail.com; dmarc=pass header.from=gmail.com`, config);
+  assert.equal(forgedBeforeGoogle.motivo, 'AUTHENTICATION_RESULTS_AMBIGUO');
+});
+
+test('HU-030 EMT-141: parser normaliza espacios/mayúsculas y exige SPF, DKIM y DMARC', () => {
+  const runtime = makeRuntime();
+  const config = clientConfig();
+  const upper = [
+    'fRoM:  <FESPINOZAC2@GMAIL.COM>  ',
+    'aUtHeNtIcAtIoN-rEsUlTs: MX.GOOGLE.COM; SPF=PASS SMTP.MAILFROM=FESPINOZAC2@GMAIL.COM;',
+    '\tDKIM=PASS HEADER.D=GMAIL.COM; DMARC=PASS HEADER.FROM=GMAIL.COM'
+  ].join('\r\n');
+  assert.equal(runtime.context.facturaImportacionAutenticarCabeceras(upper, config).autorizado, true);
+
+  for (const [headers, reason] of [
+    [authenticationHeaders().replace(/spf=pass[^;]*/, ''), 'SPF_AUSENTE'],
+    [authenticationHeaders().replace(/dkim=pass[^;]*/, ''), 'DKIM_AUSENTE'],
+    [authenticationHeaders().replace(/dmarc=pass[^;]*/, ''), 'DMARC_AUSENTE']
+  ] as const) {
+    const result = runtime.context.facturaImportacionAutenticarCabeceras(headers, config);
+    assert.equal(result.autorizado, false);
+    assert.equal(result.motivo, reason);
+  }
+  const misalignedDmarc = runtime.context.facturaImportacionAutenticarCabeceras(
+    authenticationHeaders({ fromDomain: 'example.com' }), config);
+  assert.equal(misalignedDmarc.autorizado, false);
+  assert.equal(misalignedDmarc.motivo, 'DMARC_INVALIDO');
 });
 
 test('HU-030 Apps Script: canonical de nueve líneas y HMAC coinciden con Node/backend', () => {
@@ -317,9 +584,12 @@ test('HU-030 Apps Script: retry recupera messageId y exige un único XML cuyo ha
   const queue: any[] = [{ messageId: 'msg-retry', sha256Xml: targetHash, retryCount: 1,
     nextAttemptAt: new Date(Date.now() - 60_000).toISOString() }];
   const retryOutcome = runtime.context.facturaImportacionRecuperarRetry(queue[0],
-    { endpoint: 'https://example.invalid/api/integraciones/facturas', keyId: 'local-test-key', secret: SECRET },
+    clientConfig(),
     queue, {}, {}, Date.now());
   assert.equal(runtime.calls.length, 1, JSON.stringify({ retryOutcome, logs: runtime.logs }));
+  const retryHeaders = runtime.calls[0]?.request.headers as Record<string, string>;
+  assert.equal(retryHeaders['X-EPSA-Message-Id'], 'msg-retry');
+  assert.equal(retryHeaders['X-EPSA-XML-SHA256'], targetHash);
   assert.equal(queue.length, 0);
 });
 
@@ -333,24 +603,23 @@ test('HU-030 Apps Script: retry sin XML exacto va a revisión y bloquea el enví
     nextAttemptAt: new Date(Date.now() - 60_000).toISOString() }];
   const attempted: Record<string, boolean> = {};
   const result = runtime.context.facturaImportacionRecuperarRetry(queue[0],
-    { endpoint: 'https://example.invalid/api/integraciones/facturas', keyId: 'local-test-key', secret: SECRET },
+    clientConfig(),
     queue, {}, attempted, Date.now());
   assert.equal(result.state, 'Revision');
   assert.equal(attempted['msg-mismatch|*'], true);
   assert.equal(queue.length, 0);
-  runtime.context.facturaImportacionProcesarMensaje({ endpoint: 'https://example.invalid/api/integraciones/facturas',
-    keyId: 'local-test-key', secret: SECRET }, email, queue, {}, attempted);
+  runtime.context.facturaImportacionProcesarMensaje(clientConfig(), email, queue, {}, attempted);
   assert.equal(runtime.calls.length, 0);
 });
 
 test('HU-030 Apps Script: fecha de corte inclusiva, solapamiento y último barrido ISO', () => {
   const runtime = makeRuntime();
   const cutoff = Date.parse('2026-10-01T12:00:00Z');
-  const first = runtime.context.facturaImportacionVentanaBarrido({ cutoffMs: cutoff, lastSweepMs: null }, cutoff + 1000);
+  const first = runtime.context.facturaImportacionVentanaBarrido({ cutoffMs: cutoff, lastSweepMs: null, remitentesAutorizados: [AUTHORIZED_SENDER] }, cutoff + 1000);
   assert.equal(runtime.context.facturaImportacionFechaEnVentana(cutoff, first), true);
   assert.equal(runtime.context.facturaImportacionFechaEnVentana(cutoff - 1, first), false);
-  assert.match(first.gmailQuery, /has:attachment \{filename:xml filename:pdf\} after:/);
-  const later = runtime.context.facturaImportacionVentanaBarrido({ cutoffMs: cutoff, lastSweepMs: cutoff + 60 * 60 * 1000 }, cutoff + 61 * 60 * 1000);
+  assert.match(first.gmailQuery, /has:attachment \{filename:xml filename:pdf\} \{from:fespinozac2@gmail\.com\} after:/);
+  const later = runtime.context.facturaImportacionVentanaBarrido({ cutoffMs: cutoff, lastSweepMs: cutoff + 60 * 60 * 1000, remitentesAutorizados: [AUTHORIZED_SENDER] }, cutoff + 61 * 60 * 1000);
   assert.equal(later.startMs, cutoff + 45 * 60 * 1000);
   assert.equal(runtime.context.facturaImportacionFechaEnVentana(later.endMs + 1, later), false);
   const values = new Map<string, string>();
