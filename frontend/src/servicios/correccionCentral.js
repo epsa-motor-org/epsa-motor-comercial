@@ -40,6 +40,8 @@ export const puedeCorregir = (user) => ["gerente", "administradora"].includes(ro
 export const esGerente = (user) => rolDe(user) === "gerente";
 // ¿La venta tiene dinero recibido o comprobante? Entonces cambiar el comprador lo confirma solo el gerente.
 export const tieneDinero = (f) => Boolean(f && (f.tienePagos || f.tieneAdelanto || f.comprobanteExterno));
+// ¿La venta del preview ya tiene la entrega registrada? (HU-032: el preview trae la entrega o null). Con entrega no hay corrección.
+export const tieneEntrega = (v) => Boolean(v?.entrega && typeof v.entrega === "object");
 
 // ---------------------------------------------------------------------------------------------
 // Motivo (la misma regla del servidor: espacios repetidos se juntan, sin caracteres de control)

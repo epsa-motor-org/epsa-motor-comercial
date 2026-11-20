@@ -102,6 +102,28 @@ export function etapaComercialDe(po, c) {
 // Etapa visible de una moto (con la decisión de techo del comprador, si la tiene)
 export const etapaConTechoComercial = (u) => u?.preparacion?.etapaComercial || preparacionDe(u?.preparacion);
 
+// HU-032 (QA 18/11, EMT-163): la etapa de Preparación solo mira el techo; en una moto vendida, la venta dice si se
+// entrega armada o embalada y qué falta (GET /api/ventas/:codven/entrega). Con esa respuesta, la etapa visible no
+// anuncia «Lista para entrega» si la entrega acordada sigue pendiente (por ejemplo, armada con el armado sin registrar).
+// e: etapa de preparación ({ etapa, tono, nota }); ent: estado de entrega de la venta vigente. Sin venta vigente, igual.
+const primeraMinuscula = (t) => String(t || "").charAt(0).toLowerCase() + String(t || "").slice(1);
+export function etapaConEntrega(e, ent) {
+  if (!e || !ent) return e;
+  // HU-021: venta cancelada después de entregar; la moto espera su retorno (no está «lista» para nada)
+  if (ent.estadoVenta === "Cancelada" && ent.estado === "Entregada") return { etapa: "Espera su retorno", tono: "ambar", nota: "Se entregó y luego se canceló la venta: falta que el gerente registre el retorno de la moto." };
+  if (ent.estadoVenta !== "Registrada") return e;
+  const faltan = Array.isArray(ent.condicionesFaltantes) ? ent.condicionesFaltantes : [];
+  const faltaArmado = faltan.some((c) => /armado final/i.test(c));
+  if (ent.estado === "Entregada") return { etapa: "Entregada", tono: "verde", nota: "La moto ya se entregó al comprador." };
+  if (ent.estado === "Lista para entrega embalada") {
+    return { etapa: "Lista para entrega embalada", tono: "verde", nota: `Se entrega embalada, sin armar.${e.etapa !== "Lista para entrega" ? ` Techo: ${primeraMinuscula(e.etapa)}.` : ""} No equivale a entregada al comprador.` };
+  }
+  if (e.etapa !== "Lista para entrega") return faltaArmado ? { ...e, nota: `${e.nota ? `${e.nota}. ` : ""}Además falta registrar el armado: la entrega se acordó armada.` } : e;
+  if (ent.estado === "Lista para entrega") return { ...e, nota: "Se entrega armada. No equivale a entregada al comprador." };
+  if (faltaArmado) return { etapa: "Falta el armado", tono: "ambar", nota: "La entrega se acordó armada y falta registrar el armado terminado (abajo, en «Preparación»)." };
+  return { etapa: "Sin pendientes de techo", tono: "celeste", nota: faltan.length ? `Para entregarla falta: ${faltan.map(primeraMinuscula).join("; ")}.` : "La entrega todavía no está lista." };
+}
+
 // Preparación de la base central en la forma que usan las pantallas
 export function preparacionDesdeOperativa(po, nomtte) {
   const e = etapaOperativa(po);

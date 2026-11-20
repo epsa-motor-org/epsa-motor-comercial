@@ -9,6 +9,7 @@ import { useAuth } from "../../context/AuthContext";
 import { mensajeError } from "../../lib/errores";
 import { inventarioApi, sinRespuesta, useConsultaCentral, useIntento } from "../../servicios/central";
 import * as C from "../../servicios/correccionCentral";
+import * as E from "../../servicios/entregaCentral";
 import * as S from "../../servicios/separacionCentral";
 import * as V from "../../servicios/ventaCentral";
 import { Aviso, Campo, Card, Modal, useToast } from "../ui";
@@ -85,6 +86,11 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
   const motoDe = (cod) => unidades?.find((u) => String(u.coduni) === String(cod)) || null;
   const compatA = pB ? C.compatibilidadMoto(motoDe(pB.unidad?.coduni), { actual: motoDe(p?.unidad?.coduni) || unidad, venta: p, form }) : null;
   const compatB = pB ? C.compatibilidadMoto(motoDe(p?.unidad?.coduni) || unidad, { actual: motoDe(pB.unidad?.coduni), venta: pB, form }) : null;
+  // HU-022 (QA 19/11, CP-022-09): con la entrega registrada no hay corrección ordinaria; se bloquea desde el formulario,
+  // no solo con un aviso al revisar. En un intercambio, basta con que una de las dos ventas esté entregada.
+  const entregadaA = C.tieneEntrega(p);
+  const entregadaB = que === C.INTERCAMBIO && C.tieneEntrega(pB);
+  const bloqueoEntrega = entregadaA || entregadaB;
 
   function calcularErrores() {
     const e = {};
@@ -99,6 +105,7 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
     }
     if (que === C.INTERCAMBIO) {
       if (!pB) e.otra = "Elige la otra venta.";
+      else if (entregadaB) e.otra = `La venta N° ${pB.codven} ya tiene la entrega registrada: no se puede intercambiar. Elige otra venta.`;
       else if (!compatA?.ok) e.otra = `Esta venta no puede quedarse con la moto de la otra: ${compatA.motivo}`;
       else if (!compatB?.ok) e.otra = `La otra venta no puede quedarse con esta moto: ${compatB.motivo}`;
     }
@@ -116,7 +123,7 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
     setIntentado(true);
     const e = calcularErrores();
     setErr(e);
-    if (Object.keys(e).length || bloqueada) return;
+    if (Object.keys(e).length || bloqueada || bloqueoEntrega) return;
     setPaso("revision");
   }
 
@@ -137,7 +144,7 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
   }
 
   async function confirmar() {
-    if (enviando || hecho || bloqueada) return;
+    if (enviando || hecho || bloqueada || bloqueoEntrega) return;
     setErr({});
     let codcliNuevo = null;
     // 1) Comprador nuevo: se registra una vez (si ya existe con esos datos, la base lo reutiliza)
@@ -179,7 +186,8 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
         const ev = h && C.correccionYaGuardada(h, { codusu: user?.codusu, motivo, versionEsperada: p.versionRelacion, codven: p.codven,
           codcliNuevo, coduniNuevo: intercambio ? pB.unidad.coduni : cambiaMoto ? coduni : null });
         if (ev) terminar({ ...ev, operaciones: ev.operaciones }, `${causa}, pero la corrección sí quedó registrada en el servidor (se verificó). No se corrigió dos veces.`);
-        else if (h) setErr({ general: `${causa} y la venta no se corrigió: sigue como estaba y tus datos siguen aquí. Vuelve a pulsar «Confirmar corrección».` });
+        else if (h && er?.status >= 500) await explicarFalla(intercambio, causa);
+        else if (h) setErr({ general: `${causa} y la venta no se corrigió: sigue como estaba y tus datos siguen aquí. Vuelve a pulsar «Confirmar corrección»: este mismo envío no se registra dos veces.` });
         else setErr({ general: NO_CONFIRMADO });
       } else {
         const x = C.errorCorreccion(er);
@@ -193,6 +201,31 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
         }
       }
     } finally { setEnviando(""); }
+  }
+
+  // El servidor respondió 5xx y la corrección no se guardó (QA 19/11, CP-022-09/10: con la venta ya entregada o con
+  // datos desactualizados el backend respondía 500). No se invita a repetir a ciegas: se vuelve a leer la venta (y la
+  // otra del intercambio) y se explica lo que cambió; la ficha se actualiza.
+  async function explicarFalla(intercambio, causa) {
+    setEnviando("Revisando la venta…");
+    const d = await cargarPreview();
+    const b = intercambio && pB ? await C.previewIntercambioApi(vta.codven, pB.codven).then((x) => { const [, ob] = x?.operaciones || []; return ob?.venta || ob || null; }).catch(() => null) : null;
+    const a = d?.venta;
+    if (!a) { setErr({ general: `${causa} y no se pudo volver a leer la venta. No se corrigió nada. Cierra la ventana y vuelve a abrir la ficha.` }); return; }
+    if (C.tieneEntrega(a) || C.tieneEntrega(b)) {
+      setBloqueada(true); onCambio?.();
+      setErr({ general: `${intercambio && C.tieneEntrega(b) && !C.tieneEntrega(a) ? `La venta N° ${pB.codven} ya tiene` : "Esta venta ya tiene"} la entrega registrada (se registró mientras corregías): no se corrige el comprador ni la moto. Si hay que revertirla, se cancela la venta con la decisión del gerente.` });
+      return;
+    }
+    const cambioA = String(a.versionRelacion) !== String(p.versionRelacion) || String(a.unidad?.coduni) !== String(p.unidad?.coduni) || a.estado !== "Registrada";
+    const cambioB = intercambio && b && (String(b.versionRelacion) !== String(pB.versionRelacion) || String(b.unidad?.coduni) !== String(pB.unidad?.coduni) || b.estado !== "Registrada");
+    if (cambioA || cambioB) { onCambio?.(); await releer("Otra persona cambió esta venta mientras la revisabas y no se corrigió nada. Se volvió a leer: revisa los datos actuales antes de confirmar."); return; }
+    if (que === C.MOTO || que === C.AMBOS) {
+      const libres = await inventarioApi().then(({ unidades: u }) => { setUnidades(u); return u; }).catch(() => null);
+      const destino = libres?.find((u) => String(u.coduni) === String(coduni));
+      if (libres && (!destino || destino.comercial !== "Libre")) { setCoduni(""); setPaso("form"); setErr({ moto: "La moto elegida ya no está libre (otra persona la separó o la vendió). Elige otra.", general: `${causa} y no se corrigió nada: la moto elegida ya no está libre.` }); return; }
+    }
+    setErr({ general: `${causa} y la venta no se corrigió: sigue como estaba. No se encontró ningún cambio en la venta ni en las motos; si vuelve a pasar, avisa al equipo técnico con el número de venta.` });
   }
 
   async function elegirOtra(item, silencioso = false) {
@@ -244,11 +277,11 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
   const pie = paso === "revision"
     ? <>
         <button type="button" className="btn btn-secondary !py-2" onClick={() => { setPaso("form"); setErr({}); }} disabled={Boolean(enviando)} data-editar-correccion>Volver a editar</button>
-        <button type="button" className="btn btn-primary !py-2" onClick={confirmar} disabled={Boolean(enviando) || bloqueada} data-confirmar-correccion>{enviando || "Confirmar corrección"}</button>
+        <button type="button" className="btn btn-primary !py-2" onClick={confirmar} disabled={Boolean(enviando) || bloqueada || bloqueoEntrega} data-confirmar-correccion>{enviando || "Confirmar corrección"}</button>
       </>
     : <>
         <button type="button" className="btn btn-secondary !py-2" onClick={onClose} data-volver-correccion>Volver</button>
-        <button form="f-corregir" className="btn btn-primary !py-2 disabled:opacity-60" disabled={!p || bloqueada} data-revisar-correccion>Revisar corrección</button>
+        <button form="f-corregir" className="btn btn-primary !py-2 disabled:opacity-60" disabled={!p || bloqueada || entregadaA} data-revisar-correccion>Revisar corrección</button>
       </>;
 
   return (
@@ -269,6 +302,7 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
         )}
         {p && paso === "form" && (
           <form id="f-corregir" onSubmit={revisar} className="space-y-4" noValidate>
+            {entregadaA && <Aviso tipo="error"><span data-bloqueo-entrega>Esta venta ya tiene la entrega registrada: no se corrige el comprador ni la moto. Si hay que revertirla, se cancela la venta con la decisión del gerente.</span></Aviso>}
             <Aviso tipo="info">La venta no se cancela ni se crea otra. Sus pagos, adelanto, evidencias, importes y comprobante siguen en ella. Solo cambia a nombre de quién está o qué moto se vendió.</Aviso>
             <fieldset>
               <legend className="field-label">¿Qué hay que corregir?</legend>
@@ -383,8 +417,11 @@ function ElegirOtraVenta({ codven, otra, onElegir, compatA, compatB, venta, erro
     const n = ++turno.current;
     setCargando(true);
     const h = setTimeout(() => {
+      // Se consulta la entrega de cada candidata: una venta entregada no se intercambia (QA 19/11, CP-022-06/09)
       V.ventasApi({ q, limite: 20 })
-        .then((r) => { if (n === turno.current) { setRes((r.items || []).filter((v) => v.estado === "Registrada" && String(v.codven) !== String(codven))); setFalla(""); } })
+        .then((r) => Promise.all((r.items || []).filter((v) => v.estado === "Registrada" && String(v.codven) !== String(codven))
+          .map((v) => E.entregaDeVentaApi(v.codven).then((e) => ({ ...v, entregada: e?.estado === E.ENTREGADA || Boolean(e?.entrega) })).catch(() => ({ ...v, entregada: null })))))
+        .then((lista) => { if (n === turno.current) { setRes(lista); setFalla(""); } })
         .catch((e) => { if (n === turno.current) setFalla(mensajeError(e)); })
         .finally(() => { if (n === turno.current) setCargando(false); });
     }, q ? 350 : 0);
@@ -402,9 +439,9 @@ function ElegirOtraVenta({ codven, otra, onElegir, compatA, compatB, venta, erro
           {res && !cargando && (res.length ? (
             <ul className="max-h-60 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 dark:divide-white/10 dark:border-white/10" data-ventas-intercambio={res.length}>
               {res.map((v) => (
-                <li key={v.codven}><button type="button" className="flex w-full flex-wrap items-baseline justify-between gap-x-3 px-3 py-2 text-left text-[13.5px] hover:bg-slate-50 dark:hover:bg-white/5" onClick={() => onElegir(v)} data-venta-intercambio={v.codven}>
+                <li key={v.codven}><button type="button" className="flex w-full flex-wrap items-baseline justify-between gap-x-3 px-3 py-2 text-left text-[13.5px] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent dark:hover:bg-white/5" onClick={() => onElegir(v)} disabled={v.entregada === true} data-venta-intercambio={v.codven} data-entregada={v.entregada === true ? "si" : v.entregada === null ? "sin-dato" : "no"}>
                   <span className="font-semibold text-marino dark:text-white">N° {v.codven} · {v.comprador?.nombre}</span>
-                  <span className="text-[12.5px] text-slate-500">{v.modelo?.nombre} · motor {v.unidad?.motor}</span>
+                  <span className="text-[12.5px] text-slate-500">{v.modelo?.nombre} · motor {v.unidad?.motor}{v.entregada === true && <b className="ml-1 font-semibold text-rose-700 dark:text-rose-300"> · Ya entregada: no se intercambia</b>}</span>
                 </button></li>
               ))}
             </ul>

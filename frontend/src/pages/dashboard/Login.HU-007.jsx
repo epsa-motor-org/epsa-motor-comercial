@@ -41,6 +41,8 @@ export default function Login() {
   const [clave, setClave] = useState("");
   const [ver, setVer] = useState(false);
   const [error, setError] = useState("");
+  // Aviso de una sesión cerrada en otra pestaña (CP-032-11): se muestra una vez
+  const [aviso] = useState(() => { try { const t = sessionStorage.getItem("epsa-aviso-login") || ""; sessionStorage.removeItem("epsa-aviso-login"); return t; } catch { return ""; } });
   const [cargando, setCargando] = useState(false);
   // Contraseña temporal: la persona crea la suya antes de entrar
   const [cambio, setCambio] = useState(null);
@@ -137,6 +139,7 @@ export default function Login() {
             <form onSubmit={onSubmit} noValidate className="px-8 pb-8 pt-7">
               <h1 className="text-[21px] font-bold text-marino dark:text-white">Iniciar sesión</h1>
               <p className="mt-1 text-[14px] text-slate-500 dark:text-white/60">Entra con la cuenta que te dio la gerencia.</p>
+              {aviso && !error && <p className="mt-4 rounded-lg bg-sky-50 px-3 py-2 text-[13.5px] font-medium text-sky-800 dark:bg-sky-500/10 dark:text-sky-200" role="status" data-aviso-login>{aviso}</p>}
               <label htmlFor="login-correo" className="field-label mt-6">Correo</label>
               <input id="login-correo" type="email" inputMode="email" className="field-input !py-3" value={usuario} onChange={(e) => setUsuario(e.target.value)}
                 autoComplete="username" autoCapitalize="none" spellCheck="false" autoFocus placeholder="tu correo" />

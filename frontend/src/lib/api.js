@@ -14,7 +14,42 @@ function guardarSesion(s) {
 // Últimos datos de cada pantalla (solo en memoria y de la sesión actual): al volver a una pantalla se ven al
 // instante mientras se actualizan. Se vacía al entrar y al salir para que otra cuenta nunca vea datos ajenos.
 export const cacheConsultas = new Map();
-export const cerrarSesionApi = () => { cacheConsultas.clear(); guardarSesion(null); };
+// HU-032 · CP-032-11 (QA 19/11): «Salir» cierra esta sesión también en Supabase Auth, no solo en la pestaña. La API valida
+// cada token con Supabase Auth, así que otra pestaña que conserve esa misma sesión ya no puede operar. Además se avisa a
+// las otras pestañas de este navegador con la misma sesión para que vuelvan al inicio de sesión. Las sesiones abiertas
+// con otro inicio de sesión (otra cuenta u otro login) no se tocan. No se envía ningún token por el canal.
+const CANAL_SESION = "epsa-sesion";
+const idSesion = (s) => String(datosToken(s?.access_token || "").session_id || "");
+function canalSesion() { try { return typeof BroadcastChannel === "function" ? new BroadcastChannel(CANAL_SESION) : null; } catch { return null; } }
+async function revocarSesion(s) {
+  if (!MODO_REAL || !s?.access_token) return;
+  let token = s.access_token;
+  // Con el token vencido, Supabase no acepta el cierre: se renueva una vez y se cierra con el nuevo
+  const exp = Number(datosToken(token).exp || 0);
+  if (exp && exp * 1000 - Date.now() < 15000 && s.refresh_token) {
+    try { token = (await authFetch("refresh_token", { refresh_token: s.refresh_token })).access_token || token; } catch { /* ya no sirve */ }
+  }
+  try {
+    await fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, { method: "POST", keepalive: true, headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` } });
+  } catch { /* sin conexión: la pestaña igual sale; el token vence solo */ }
+}
+export const cerrarSesionApi = () => {
+  const s = leerSesion();
+  cacheConsultas.clear(); guardarSesion(null);
+  const sid = idSesion(s);
+  if (sid) { const c = canalSesion(); try { c?.postMessage({ tipo: "salir", sesion: sid }); } catch {} c?.close(); }
+  return revocarSesion(s);
+};
+// Otra pestaña cerró esta misma sesión: se limpia aquí también y se avisa (AuthContext vuelve al inicio de sesión)
+export function alCerrarseEnOtraPestana(cb) {
+  const c = canalSesion();
+  if (!c) return () => {};
+  c.onmessage = (ev) => {
+    const sid = idSesion(leerSesion());
+    if (ev?.data?.tipo === "salir" && sid && ev.data.sesion === sid) { cacheConsultas.clear(); guardarSesion(null); cb?.(); }
+  };
+  return () => c.close();
+}
 
 
 // Código de error de Supabase Auth (formato nuevo y antiguo)

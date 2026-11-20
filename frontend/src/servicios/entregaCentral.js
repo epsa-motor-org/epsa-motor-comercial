@@ -5,7 +5,7 @@
 // POST /api/ventas/:codven/entrega registra la entrega con una clave de intento (Idempotency-Key): un reintento no
 // la duplica. El servidor vuelve a comprobar todo al confirmar (responsable vigente, sede, tránsito, armado y techo).
 // La entrega no cambia la venta, los pagos, la ubicación, el techo ni la preparación de la moto.
-import { pedir } from "../lib/api";
+import { listarUbicaciones, pedir } from "../lib/api";
 import * as S from "./separacionCentral";
 import * as V from "./ventaCentral";
 import { VENTA, cancelacionDeApi } from "./cancelacionCentral";
@@ -20,8 +20,9 @@ export const LISTA = "Lista para entrega";
 export const LISTA_EMBALADA = "Lista para entrega embalada";
 export const PENDIENTE = "Vendida pendiente de entrega";
 export const CANCELADA = "Venta cancelada";
+export const RETORNADA = "Retornada"; // HU-021: venta cancelada después de entregar y la moto ya regresó (retorno físico)
 export const lista = (e) => e?.estado === LISTA || e?.estado === LISTA_EMBALADA;
-export const TONO_ENTREGA = { [ENTREGADA]: "verde", [LISTA]: "verde", [LISTA_EMBALADA]: "verde", [PENDIENTE]: "ambar", [CANCELADA]: "gris" };
+export const TONO_ENTREGA = { [ENTREGADA]: "verde", [LISTA]: "verde", [LISTA_EMBALADA]: "verde", [PENDIENTE]: "ambar", [CANCELADA]: "gris", [RETORNADA]: "gris" };
 
 // Quién la registra (para mostrar el botón; el servidor decide): gerente y administradora; un vendedor solo si es el
 // responsable comercial vigente de la venta.
@@ -68,6 +69,58 @@ export async function ventaCanceladaEntregadaApi(unidad, user) {
   }
   return { venta: canceladas[0], entrega: null, cancelacion: null, restringida: !visibles.length };
 }
+// ---------------------------------------------------------------------------------------------
+// HU-021 · Retorno físico de una moto entregada cuya venta se canceló (contrato de Michelle, PR #65, 19/11)
+// POST /api/ventas/:codven/retorno, solo Gerente, con Idempotency-Key. Cuerpo exacto: fechaRetorno (YYYY-MM-DD, no
+// futura ni anterior a la entrega), codubi (sede o almacén EPSA activo), condicion (hasta 500) y observacion (hasta
+// 1000). Al registrarlo la moto queda en esa ubicación y vuelve a ofrecerse si no tiene otro compromiso (regla del PO
+// del 16/11: sin una segunda decisión). No borra la venta, la entrega ni la cancelación; no devuelve dinero.
+// ---------------------------------------------------------------------------------------------
+export const MAX_CONDICION = 500;
+export const MAX_OBS_RETORNO = 1000;
+export const registrarRetornoApi = (codven, cuerpo, clave) =>
+  pedir(`/api/ventas/${codven}/retorno`, { metodo: "POST", cuerpo, headers: { "Idempotency-Key": clave } });
+export const puedeRegistrarRetorno = (user) => String(user?.rol || "").toLowerCase() === "gerente";
+// Lugares EPSA donde puede quedar la moto al volver: sedes y almacenes activos (no proveedores de techo)
+export const ubicacionesRetornoApi = () => listarUbicaciones(true).then((r) => (r.data || [])
+  .filter((u) => (u.tipubi === "Sede" || u.tipubi === "Almacen") && u.estubi !== false)
+  .map((u) => ({ codubi: String(u.codubi), nombre: u.nomubi, tipo: u.tipubi === "Almacen" ? "Almacén" : "Sede" }))
+  .sort((a, b) => a.tipo.localeCompare(b.tipo) || a.nombre.localeCompare(b.nombre, "es")));
+export function erroresRetorno(f, { hoy, fechaEntrega = "" } = {}) {
+  const e = {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f.fecha || "")) e.fecha = "Indica la fecha real en que volvió la moto.";
+  else if (hoy && f.fecha > hoy) e.fecha = "La fecha no puede ser futura: registra el retorno cuando la moto haya vuelto.";
+  else if (fechaEntrega && f.fecha < fechaEntrega) e.fecha = "La fecha no puede ser anterior a la entrega.";
+  if (!f.codubi) e.codubi = "Elige la sede o el almacén donde quedó la moto.";
+  const condicion = limpio(f.condicion);
+  if (!condicion) e.condicion = "Describe cómo volvió la moto.";
+  else if (condicion.length > MAX_CONDICION || CONTROL.test(f.condicion.replace(/[\r\n\t]/g, " "))) e.condicion = `Máximo ${MAX_CONDICION} caracteres, sin símbolos raros.`;
+  const obs = limpio(f.observacion);
+  if (!obs) e.observacion = "Escribe una observación del retorno.";
+  else if (obs.length > MAX_OBS_RETORNO || CONTROL.test(f.observacion.replace(/[\r\n\t]/g, " "))) e.observacion = `Máximo ${MAX_OBS_RETORNO} caracteres, sin símbolos raros.`;
+  return e;
+}
+export const cuerpoRetorno = (f) => ({ fechaRetorno: f.fecha, codubi: Number(f.codubi), condicion: limpio(f.condicion), observacion: limpio(f.observacion) });
+export function textoErrorRetorno(e) {
+  const m = String(e?.message || "");
+  if (e?.status === 403) return "Solo el gerente registra el retorno de la moto.";
+  if (e?.status === 404) return "No se encontró la venta o su moto. Actualiza la ficha.";
+  if (/ya fue registrado/i.test(m)) return "El retorno de esta moto ya estaba registrado. No se registró otro.";
+  if (/Idempotency/i.test(m)) return "Este intento ya se usó con otros datos. Cierra la ventana y vuelve a registrar el retorno.";
+  if (/no est[aá] cancelada|entrega efectiva compatible/i.test(m)) return "La venta ya no está cancelada con una entrega registrada (cambió mientras tanto). Actualiza la ficha.";
+  if (e?.status === 400) return `${m || "Los datos del retorno no son válidos"}. Revisa la fecha (no futura ni anterior a la entrega) y que la ubicación sea una sede o almacén activo.`;
+  if (/cambi[oó]|modificando/i.test(m)) return `${m}. No se registró el retorno.`;
+  return m || "No se pudo registrar el retorno.";
+}
+// Retorno ya registrado de una venta (GET …/entrega lo proyecta con estado «Retornada»)
+export const retornoDe = (e) => (e?.estado === RETORNADA || e?.retorno ? e?.retorno || null : null);
+// El retorno leído después de una falla es el que se envió (mismo gerente y mismos datos, como compara el servidor)
+export const esMismoRetorno = (r, cuerpo, user) => Boolean(r && cuerpo
+  && String(r.registradoPor?.codusu ?? "") === String(user?.codusu ?? "-")
+  && String(r.fechaRetorno || "").slice(0, 10) === cuerpo.fechaRetorno
+  && String(r.ubicacion?.codubi ?? "") === String(cuerpo.codubi)
+  && limpio(r.condicion) === cuerpo.condicion && limpio(r.observacion) === cuerpo.observacion);
+
 export const BLOQUEO_RETORNO = "La venta se canceló después de entregar la moto: la entrega se conserva y la moto queda bloqueada hasta que el gerente registre su retorno. Con el retorno registrado, vuelve a ofrecerse.";
 
 export const MAX_RECEPTOR = 200;
