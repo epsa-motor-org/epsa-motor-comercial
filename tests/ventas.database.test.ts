@@ -69,13 +69,14 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     if (valor.code === codigo) return true;
     return valor.code === 'PGRST' && jsonError(valor.message)?.code === codigo;
   };
-  const errorHttp = (codigo: string, status: number) => (e: unknown) => {
+  const errorHttp = (codigo: string, status: number,
+    mensaje500 = 'Error interno al procesar la corrección de la venta') => (e: unknown) => {
     const valor = e as ErrorSQL;
     const mensaje = valor.code === 'PGRST' ? jsonError(valor.message) : null;
     const detalle = jsonError(valor.detail);
     return mensaje?.code === codigo && mensaje.details === null && mensaje.hint === null
       && detalle?.status === status
-      && (status !== 500 || mensaje.message === 'Error interno al procesar la corrección de la venta');
+      && (status !== 500 || mensaje.message === mensaje500);
   };
   const claveNueva = () => randomUUID();
   const ventaParams = (coduni: string, opciones: Partial<{
@@ -350,6 +351,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await db.exec(leer('supabase/migrations/202611150003_hu032_entrega_moto_vendida.sql'));
     await db.exec(leer('supabase/migrations/202611190001_hu021_retorno_fisico.sql'));
     await db.exec(leer('supabase/migrations/202611190002_hu022_transporte_errores_postgrest.sql'));
+    await db.exec(leer('supabase/migrations/20261120031745_hu021_transporte_errores_postgrest.sql'));
   } catch (error) {
     await db.exec('ROLLBACK');
     throw new Error(`HU-032 migration failed: ${(error as Error).message} ${JSON.stringify(error)}`);
@@ -366,6 +368,47 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
   )).rows.map(fila => [fila.nomtte, { codtte: fila.codtte, adicionalref: Number(fila.adicionalref) }])));
 
   await t.after(() => db.close());
+
+  await t.test('HU-021 PostgREST: las RPC públicas adaptan PT sin exponer implementaciones internas', async () => {
+    const nombres = [
+      'hu021_cancelar_separacion', 'hu021_cancelar_venta',
+      'hu021_consultar_cancelacion_separacion', 'hu021_consultar_cancelacion_venta',
+      'hu021_registrar_retorno'
+    ];
+    const funciones = await propietario(async () => (await db.query<{ proname: string; prosrc: string }>(
+      `SELECT p.proname,p.prosrc FROM pg_catalog.pg_proc p
+       JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+       WHERE n.nspname='public' AND p.proname IN (${nombres.map(n => `'${n}'`).join(',')})`
+    )).rows);
+    assert.equal(funciones.length, nombres.length);
+    for (const funcion of funciones) {
+      assert.match(funcion.prosrc, new RegExp(`${funcion.proname}_negocio\\s*\\(`), funcion.proname);
+      assert.doesNotMatch(funcion.prosrc,
+        /RAISE\s+EXCEPTION\s+USING\s+ERRCODE\s*=\s*'PT\d{3}'|RAISE\s+SQLSTATE\s+'PT\d{3}'/i,
+        `${funcion.proname} no debe devolver un SQLSTATE PT directamente`);
+    }
+    await login(1);
+    await assert.rejects(db.query('SELECT public.hu021_cancelar_venta_negocio(1,NULL,NULL,NULL)'), error('42501'),
+      'authenticated no puede invocar la implementación interna');
+    await assert.rejects(propietario(() => db.query(
+      "SELECT public.hu021_lanzar_error_http('PT699','mensaje interno no exponer')"
+    )), errorHttp('PT699', 500, 'Error interno al procesar una operación HU-021'),
+    'un PT no catalogado conserva su código pero lleva status 500 y mensaje genérico');
+    await assert.rejects(propietario(() => db.query(
+      "SELECT public.hu021_lanzar_error_http('PT657','compromiso vigente')"
+    )), errorHttp('PT657', 409), 'el mapper reserva PT657 como conflicto aunque la RPC vigente no lo emita');
+  });
+
+  await t.test('HU-021 PostgreSQL: códigos iniciales y consultas conservan HTTP estándar', async () => {
+    await login(1);
+    await assert.rejects(escalar('SELECT public.hu021_cancelar_separacion(0,\'motivo\',NULL,$1::uuid) r', [claveNueva()]),
+      errorHttp('PT650', 400));
+    await assert.rejects(cancelarSeparacion('999999', 'No existe', 'Observación válida'), errorHttp('PT651', 404));
+    await assert.rejects(escalar('SELECT public.hu021_cancelar_venta(999999,$1,NULL,$2::uuid) r',
+      ['x'.repeat(251), claveNueva()]), errorHttp('PT655', 422));
+    await assert.rejects(escalar('SELECT public.hu021_consultar_cancelacion_venta(0) r'), errorHttp('PT650', 400));
+    await assert.rejects(escalar('SELECT public.hu021_consultar_cancelacion_venta(999999) r'), errorHttp('PT651', 404));
+  });
 
   await t.test('HU-006 concilia snapshots históricos usando el importe antiguo como base', async () => {
     await login(1);
@@ -895,12 +938,12 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await login(3);
     const sepAutor = await crearSeparacionHU021(autorUnidad, 3);
     await propietario(() => db.query('UPDATE public.separacion SET codusuresp=6 WHERE codsep=$1', [sepAutor]));
-    await assert.rejects(cancelarSeparacion(sepAutor, 'Autor no vigente', 'No devolver hasta conciliar'), error('PT652'));
+    await assert.rejects(cancelarSeparacion(sepAutor, 'Autor no vigente', 'No devolver hasta conciliar'), errorHttp('PT652', 403));
     await login(6);
     const claveSep = claveNueva();
     assert.equal((await cancelarSeparacion(sepAutor, 'Responsable reasignado', 'No devolver hasta conciliar', claveSep)).estado, 'Cancelada');
     await propietario(() => db.query('UPDATE public.separacion SET codusuresp=3 WHERE codsep=$1', [sepAutor]));
-    await assert.rejects(cancelarSeparacion(sepAutor, 'Responsable reasignado', 'No devolver hasta conciliar', claveSep), error('PT652'),
+    await assert.rejects(cancelarSeparacion(sepAutor, 'Responsable reasignado', 'No devolver hasta conciliar', claveSep), errorHttp('PT652', 403),
       'el replay también verifica el responsable vigente después del lock');
 
     const responsableUnidad = await crearUnidadHU021();
@@ -915,7 +958,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await login(1);
     const separacionAjena = await crearSeparacionHU021(unidadAjena, 2);
     await login(3);
-    await assert.rejects(cancelarSeparacion(separacionAjena, 'Intento ajeno', 'Observación'), error('PT652'));
+    await assert.rejects(cancelarSeparacion(separacionAjena, 'Intento ajeno', 'Observación'), errorHttp('PT652', 403));
     const antes = await propietario(() => escalar<{ estado: string; comercial: string }>(
       `SELECT jsonb_build_object('estado',s.estsep,'comercial',u.estcomuni) r
        FROM public.separacion s JOIN public.unidad u USING(coduni) WHERE s.codsep=$1`, [separacionAjena]));
@@ -927,7 +970,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await login(3);
     const codsep = await crearSeparacionHU021(unidadConvertida);
     const venta = await crearVenta(unidadConvertida, { clave: claveNueva() });
-    await assert.rejects(cancelarSeparacion(codsep, 'No aplica', 'Adelanto se mantiene'), error('PT653'));
+    await assert.rejects(cancelarSeparacion(codsep, 'No aplica', 'Adelanto se mantiene'), errorHttp('PT653', 409));
     const estados = await propietario(() => escalar<{ sep: string; ven: string; eventos: number }>(
       `SELECT jsonb_build_object('sep',(SELECT estsep FROM public.separacion WHERE codsep=$1),
         'ven',(SELECT estven FROM public.venta WHERE codven=$2),
@@ -951,7 +994,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       `SELECT jsonb_build_object('codubi',u.codubi,'codtte',u.codtte,'codpro',u.codpro,
         'detalle',u.dettecuni,'armado',p.estarmado,'techo',p.esttecho,'version',p.versionprep) r
        FROM public.unidad u JOIN public.preparacionunidad p USING(coduni) WHERE u.coduni=$1`, [unidad]));
-    await assert.rejects(cancelarSeparacion(separacion.codsep, 'Comprador desistió', null), error('PT656'));
+    await assert.rejects(cancelarSeparacion(separacion.codsep, 'Comprador desistió', null), errorHttp('PT656', 422));
     const salida = await cancelarSeparacion(separacion.codsep, 'Comprador desistió', 'Adelanto queda pendiente de conciliación');
     assert.equal((salida.finanzasConservadas as Record<string, unknown>).adelanto, 100);
     assert.equal((salida.finanzasConservadas as Record<string, unknown>).evidenciaConservada, true);
@@ -985,7 +1028,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       `SELECT jsonb_build_object('codubi',u.codubi,'codtte',u.codtte,'codpro',u.codpro,
         'detalle',u.dettecuni,'armado',p.estarmado,'techo',p.esttecho,'version',p.versionprep) r
        FROM public.unidad u JOIN public.preparacionunidad p USING(coduni) WHERE u.coduni=$1`, [unidad]));
-    await assert.rejects(cancelarVentaHU021(venta.codven, 'Comprador desistió', null), error('PT656'));
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Comprador desistió', null), errorHttp('PT656', 422));
     const cancelada = await cancelarVentaHU021(venta.codven, 'Comprador desistió', 'Mantener saldo para conciliación');
     assert.equal(cancelada.estado, 'Cancelada');
     assert.equal(cancelada.estadoComercialUnidad, 'Disponible');
@@ -1016,7 +1059,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await login(3);
     const ventaAutor = await crearVenta(autorUnidad, { responsable: 3, clave: claveNueva() });
     await propietario(() => db.query('UPDATE public.venta SET codusuresp=6 WHERE codven=$1', [ventaAutor.codven]));
-    await assert.rejects(cancelarVentaHU021(ventaAutor.codven, 'Autor ya no asignado', null), error('PT652'));
+    await assert.rejects(cancelarVentaHU021(ventaAutor.codven, 'Autor ya no asignado', null), errorHttp('PT652', 403));
     await login(6);
     const claveVenta = claveNueva();
     const canceladaPorResponsable = await cancelarVentaHU021(ventaAutor.codven, 'Responsable reasignado', null, claveVenta);
@@ -1047,7 +1090,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await login(1);
     const ventaAjena = await crearVenta(ajenaUnidad, { responsable: 2, clave: claveNueva() });
     await login(3);
-    await assert.rejects(cancelarVentaHU021(ventaAjena.codven, 'Intento ajeno', null), error('PT652'));
+    await assert.rejects(cancelarVentaHU021(ventaAjena.codven, 'Intento ajeno', null), errorHttp('PT652', 403));
     assert.equal(await propietario(() => escalar<string>('SELECT estven r FROM public.venta WHERE codven=$1', [ventaAjena.codven])), 'Registrada');
   });
 
@@ -1057,9 +1100,9 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     const venta = await crearVenta(unidad, { responsable: 3, clave: claveNueva() });
     await propietario(() => db.query(`UPDATE public.venta SET codusuresp=NULL,
       idempotenciaven=NULL,payloadidempotenciaven=NULL WHERE codven=$1`, [venta.codven]));
-    await assert.rejects(cancelarVentaHU021(venta.codven, 'Autor sin asignación vigente', null), error('PT652'));
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Autor sin asignación vigente', null), errorHttp('PT652', 403));
     await login(6);
-    await assert.rejects(cancelarVentaHU021(venta.codven, 'Otro vendedor sin asignación', null), error('PT652'));
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Otro vendedor sin asignación', null), errorHttp('PT652', 403));
     await login(1);
     assert.equal((await cancelarVentaHU021(venta.codven, 'Cancelación por gerente', null)).estado, 'Cancelada');
 
@@ -1109,8 +1152,8 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     const primera = await cancelarVentaHU021(venta.codven, 'Corrección comercial', null, key);
     assert.equal(primera.reutilizada, false);
     assert.equal((await cancelarVentaHU021(venta.codven, 'Corrección comercial', null, key)).reutilizada, true);
-    await assert.rejects(cancelarVentaHU021(venta.codven, 'Motivo diferente', null, key), error('PT658'));
-    await assert.rejects(cancelarVentaHU021(venta.codven, 'Corrección comercial', null, claveNueva()), error('PT654'));
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Motivo diferente', null, key), errorHttp('PT658', 409));
+    await assert.rejects(cancelarVentaHU021(venta.codven, 'Corrección comercial', null, claveNueva()), errorHttp('PT654', 409));
     const lectura = await escalar<Record<string, unknown>>(
       'SELECT public.hu021_consultar_cancelacion_venta($1) r', [venta.codven]);
     assert.equal(lectura.tipoOperacion, 'Venta');
@@ -1132,8 +1175,8 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     const replay = await cancelarSeparacion(...argumentos);
     assert.equal(primera.reutilizada, false);
     assert.equal(replay.reutilizada, true);
-    await assert.rejects(cancelarSeparacion(codsep, 'Solicitud distinta', 'Adelanto retenido', key), error('PT658'));
-    await assert.rejects(cancelarSeparacion(codsep, 'Solicitud cancelada', 'Adelanto retenido', claveNueva()), error('PT659'));
+    await assert.rejects(cancelarSeparacion(codsep, 'Solicitud distinta', 'Adelanto retenido', key), errorHttp('PT658', 409));
+    await assert.rejects(cancelarSeparacion(codsep, 'Solicitud cancelada', 'Adelanto retenido', claveNueva()), errorHttp('PT659', 409));
     const auditoria = await propietario(() => escalar<Record<string, unknown>>(
       `SELECT jsonb_build_object('cantidad',(SELECT count(*)::int FROM public.historialcancelacion WHERE codsep=$1),
         'tipo',h.tipoperacion,'accion',h.accion,'actor',h.codusu::text,'motivo',h.motivo,
@@ -1926,10 +1969,10 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     const replay = await registrarRetorno(venta1.codven, { clave: key });
     assert.equal(replay.reutilizada, true);
     assert.equal((replay.retorno as Record<string, unknown>).codretorno, eventoRetorno.codretorno);
-    await assert.rejects(registrarRetorno(venta1.codven, { clave: key, observacion: 'Payload distinto' }), error('PT704'));
-    await assert.rejects(registrarRetorno(venta1.codven, { clave: key, codubi: '999999' }), error('PT704'),
+    await assert.rejects(registrarRetorno(venta1.codven, { clave: key, observacion: 'Payload distinto' }), errorHttp('PT704', 409));
+    await assert.rejects(registrarRetorno(venta1.codven, { clave: key, codubi: '999999' }), errorHttp('PT704', 409),
       'la clave se compara antes de revalidar una ubicación modificada');
-    await assert.rejects(registrarRetorno(venta1.codven), error('PT705'));
+    await assert.rejects(registrarRetorno(venta1.codven), errorHttp('PT705', 409));
     assert.equal(await propietario(() => escalar<number>(
       'SELECT count(*)::int r FROM public.hu021_retorno WHERE codven=$1', [venta1.codven])), 1);
     await assert.rejects(db.query('SELECT * FROM public.hu021_retorno'), error('42501'),
@@ -1962,13 +2005,13 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     await login(1);
     const ventaActiva = await crearVentaConAcuerdoEntrega(unidad, 'Embalada');
     await prepararUnidadEntrega(unidad, { codubi: '2' });
-    await assert.rejects(registrarRetorno(ventaActiva.codven), error('PT703'), 'una venta todavía activa no se retorna');
+    await assert.rejects(registrarRetorno(ventaActiva.codven), errorHttp('PT703', 409), 'una venta todavía activa no se retorna');
     await cancelarVentaHU021(ventaActiva.codven, 'Cancelada sin entrega', null);
-    await assert.rejects(registrarRetorno(ventaActiva.codven), error('PT703'), 'cancelación sin entrega no acredita retorno');
-    await assert.rejects(registrarRetorno('999999'), error('PT702'), 'venta inexistente');
-    await assert.rejects(registrarRetorno(ventaActiva.codven, { fecha: null }), error('PT701'));
-    await assert.rejects(registrarRetorno(ventaActiva.codven, { condicion: '  ' }), error('PT701'));
-    await assert.rejects(registrarRetorno(ventaActiva.codven, { observacion: null }), error('PT701'));
+    await assert.rejects(registrarRetorno(ventaActiva.codven), errorHttp('PT703', 409), 'cancelación sin entrega no acredita retorno');
+    await assert.rejects(registrarRetorno('999999'), errorHttp('PT702', 404), 'venta inexistente');
+    await assert.rejects(registrarRetorno(ventaActiva.codven, { fecha: null }), errorHttp('PT701', 400));
+    await assert.rejects(registrarRetorno(ventaActiva.codven, { condicion: '  ' }), errorHttp('PT701', 400));
+    await assert.rejects(registrarRetorno(ventaActiva.codven, { observacion: null }), errorHttp('PT701', 400));
     const ventaEntregada = await crearVentaConAcuerdoEntrega(unidad, 'Embalada');
     const entrega = await registrarEntrega(ventaEntregada.codven, unidad, '1', 'Embalada');
     assert.equal(entrega.conflicto, false);
@@ -1981,11 +2024,11 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
       "INSERT INTO public.ubicacion(nomubi,tipubi,estubi) VALUES ('HU021 Retorno Inactivo QA','Almacen',false) RETURNING codubi::text r"));
     assert.ok(almacenActivo);
     assert.ok(proveedorActivo);
-    await assert.rejects(registrarRetorno(ventaEntregada.codven, { codubi: proveedorActivo }), error('PT701'),
+    await assert.rejects(registrarRetorno(ventaEntregada.codven, { codubi: proveedorActivo }), errorHttp('PT701', 400),
       'una ubicación Proveedor no es una ubicación EPSA para retornar la unidad');
-    await assert.rejects(registrarRetorno(ventaEntregada.codven, { codubi: almacenInactivo }), error('PT701'),
+    await assert.rejects(registrarRetorno(ventaEntregada.codven, { codubi: almacenInactivo }), errorHttp('PT701', 400),
       'un Almacen inactivo no es válido para el retorno');
-    await assert.rejects(registrarRetorno(ventaEntregada.codven, { codubi: '999999' }), error('PT701'),
+    await assert.rejects(registrarRetorno(ventaEntregada.codven, { codubi: '999999' }), errorHttp('PT701', 400),
       'una ubicación inexistente no es válida para retorno');
     await login(2);
     await assert.rejects(registrarRetorno(ventaEntregada.codven), error('42501'), 'Administradora no puede registrar retorno');
@@ -2026,7 +2069,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     ]);
     assert.equal(intentos.filter(item => item.status === 'fulfilled').length, 1);
     const fallido = intentos.find(item => item.status === 'rejected') as PromiseRejectedResult;
-    assert.equal((fallido.reason as ErrorSQL).code, 'PT705');
+    assert.ok(errorHttp('PT705', 409)(fallido.reason), 'el segundo intento mantiene PT705 dentro del sobre HTTP 409');
     assert.equal(await propietario(() => escalar<number>(
       'SELECT count(*)::int r FROM public.hu021_retorno WHERE codven=$1', [venta.codven])), 1);
   });

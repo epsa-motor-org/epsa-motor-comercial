@@ -112,7 +112,7 @@ test('HU-021 retorno HTTP: rechaza campos de identidad y datos inválidos antes 
 
 test('HU-021 retorno HTTP: mapea errores de negocio/conflicto sin filtrar detalles SQL', async () => {
   const casos: Array<[string, number]> = [['PT701', 400], ['PT702', 404], ['PT703', 409], ['PT704', 409],
-    ['PT705', 409], ['42501', 403], ['40001', 409], ['40P01', 409]];
+    ['PT705', 409], ['42501', 403], ['40001', 409], ['40P01', 409], ['XX000', 500]];
   let turno = 0;
   await entorno(async (base, llamadas) => {
     for (const [codigo, status] of casos) {
@@ -123,6 +123,7 @@ test('HU-021 retorno HTTP: mapea errores de negocio/conflicto sin filtrar detall
         assert.equal(result.body.message,
           'Los datos del retorno no son válidos o la ubicación no es un lugar EPSA activo para unidades');
       }
+      if (codigo === 'XX000') assert.equal(result.body.message, 'Error interno al registrar el retorno físico');
     }
     assert.equal(llamadas.length, casos.length);
   }, () => ({ data: null, error: { code: casos[turno++]?.[0], message: 'detalle SQL privado', details: 'secreto', hint: 'oculto' } }));
