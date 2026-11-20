@@ -6,7 +6,7 @@ import { useConsultaCentral } from "../../servicios/central";
 import { listarCompras } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Link } from "./LinkPanel";
-import { TONO_COMERCIAL, preparacionDe, techoDe, ubicacionDe } from "../../servicios/inventarioCentral";
+import { TONO_COMERCIAL, etapaConEntrega, preparacionDe, techoDe, ubicacionDe } from "../../servicios/inventarioCentral";
 import { Aviso, btnMini } from "../ui";
 import { ZONA_LIMA, fechaLocal, formatoDia, horaLima, hoyLocal } from "../../lib/validar";
 import { ColorPunto, Pill } from "./Sprint2";
@@ -104,8 +104,9 @@ export function PillComercial({ comercial }) {
   return <Pill tono={TONO_COMERCIAL[comercial] || "gris"}>{comercial === "Libre" ? "Libre para vender" : comercial || "Sin dato"}</Pill>;
 }
 
-export function PillPreparacion({ preparacion }) {
-  const p = preparacionDe(preparacion);
+// entrega (opcional): estado de entrega de la venta vigente (HU-032), para no anunciar «Lista para entrega» si falta algo
+export function PillPreparacion({ preparacion, entrega = null }) {
+  const p = etapaConEntrega(preparacionDe(preparacion), entrega);
   return <Pill tono={p.tono}>{p.etapa}</Pill>;
 }
 

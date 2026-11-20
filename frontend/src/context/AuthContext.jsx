@@ -4,7 +4,7 @@
 // así el menú de cada persona cambia sin que tenga que volver a entrar. El gerente siempre ve todo.
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { ROLES } from "../data/mockData";
-import { cerrarSesionApi, permisosListarApi } from "../lib/api";
+import { alCerrarseEnOtraPestana, cerrarSesionApi, permisosListarApi } from "../lib/api";
 import { MODO_REAL } from "../lib/config";
 import { mensajeError } from "../lib/errores";
 import useAutoRefresco from "../hooks/useAutoRefresco";
@@ -39,9 +39,14 @@ export function AuthProvider({ children }) {
   }
   function logout() {
     try { sessionStorage.removeItem("epsa-user"); } catch {}
-    cerrarSesionApi();
+    cerrarSesionApi(); // cierra la sesión en Supabase sin hacer esperar a la persona
     setUser(null);
   }
+  // CP-032-11: si en otra pestaña se cerró esta misma sesión, esta también sale (sin datos de la cuenta en pantalla)
+  useEffect(() => alCerrarseEnOtraPestana(() => {
+    try { sessionStorage.removeItem("epsa-user"); sessionStorage.setItem("epsa-aviso-login", "Cerraste sesión en otra pestaña. Vuelve a iniciar sesión."); } catch {}
+    setUser(null);
+  }), []);
 
   // ---------------------------------------------------------------------------------------------
   // Leer los permisos (al entrar y cada 10 s). Si falla la red se conservan los últimos leídos.

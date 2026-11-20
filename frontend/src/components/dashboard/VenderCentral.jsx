@@ -22,7 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { mensajeError } from "../../lib/errores";
 import { fechaLarga } from "../../lib/validar";
 import { sinRespuesta, useConsultaCentral, useIntento } from "../../servicios/central";
-import { etapaConTechoComercial, ubicacionDe } from "../../servicios/inventarioCentral";
+import { etapaConEntrega, etapaConTechoComercial, ubicacionDe } from "../../servicios/inventarioCentral";
 import * as S from "../../servicios/separacionCentral";
 import * as V from "../../servicios/ventaCentral";
 import { Aviso, Campo, Card, Modal, useToast } from "../ui";
@@ -758,7 +758,7 @@ export default function VenderMotoCentral({ unidad, onClose, onHecho, onConflict
 // Ficha de la moto: venta registrada
 // ---------------------------------------------------------------------------------------------
 // HU-021: «Cancelar venta» (onCancelar) para el gerente, la administradora o el vendedor responsable vigente
-export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, onCorregir, onEntrega, version = 0 }) {
+export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, onCorregir, onEntrega, onRetorno, version = 0 }) {
   const toast = useToast();
   const { user } = useAuth();
   const activo = unidad?.comercial === "Vendida";
@@ -778,8 +778,9 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
   const entregaFicha = vta ? entrega.data || null : sinVigente ? cancelada.data?.entrega || null : null;
   useEffect(() => { onEntrega?.(entregaFicha); }, [entregaFicha]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!activo) return null;
-  if (sinVigente) return <VentaCanceladaEntregadaCard unidad={unidad} consulta={cancelada} />;
+  if (sinVigente) return <VentaCanceladaEntregadaCard unidad={unidad} consulta={cancelada} onRetorno={onRetorno} onCambio={() => { cancelada.refrescar(true); onCambio?.(); }} />;
   const entregada = estadoEntrega === E.ENTREGADA;
+  const entregaSabida = verEntrega && Boolean(entrega.data) && !entrega.error;
   async function verEvidencia(ruta) {
     const ventana = window.open("", "_blank");
     try { const url = await V.urlEvidenciaVentaApi(ruta); if (ventana) ventana.location.href = url; else window.open(url, "_blank"); }
@@ -793,7 +794,7 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
   const base = vta?.precioBaseAcordado;
   const acordado = Number(vta?.adicionalTechoAcordado);
   const referencial = Number(vta?.adicionalTechoReferencial);
-  const prep = etapaConTechoComercial(unidad);
+  const prep = entregada ? etapaConTechoComercial(unidad) : etapaConEntrega(etapaConTechoComercial(unidad), entrega.data); // HU-032 (EMT-163)
   // Escenarios 13 y 22 (PO 15/11): techo físico de la moto y lo acordado en la venta, por separado
   const fisico = S.techoConfiguradoDe(unidad);
   const adecuacion = vta ? S.adecuacionPendiente(fisico, t.decision, t.codtte ? { codtte: t.codtte, nombre: vta.techoNombre } : null) : "";
@@ -806,7 +807,8 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
         </div>
         <div className="flex flex-wrap gap-2">
           {vta && puedeEditar && !vta.comprobanteExterno && <button className="btn btn-secondary !py-2 text-[13px]" onClick={() => setComprobante(true)} data-registrar-comprobante>Registrar comprobante</button>}
-          {vta && !entregada && <BotonCorregir venta={vta} onCorregir={onCorregir} />}
+          {/* HU-022 (QA 19/11, CP-022-09): «Corregir» solo cuando ya se sabe que la venta no se entregó, no mientras se consulta */}
+          {vta && entregaSabida && !entregada && <BotonCorregir venta={vta} onCorregir={onCorregir} />}
           {vta && <BotonCancelar tipo={VENTA} operacion={vta} onCancelar={onCancelar} />}
         </div>
       </div>

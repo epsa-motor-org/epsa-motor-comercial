@@ -7,7 +7,7 @@ import { useState } from "react";
 import { actualizarPreparacionApi, preparacionUnidadApi } from "../../lib/api";
 import { mensajeError } from "../../lib/errores";
 import { useConsultaCentral, useIntento } from "../../servicios/central";
-import { etapaComercialDe, etapaOperativa, techoPorArmar } from "../../servicios/inventarioCentral";
+import { etapaComercialDe, etapaConEntrega, etapaOperativa, techoPorArmar } from "../../servicios/inventarioCentral";
 import { Aviso, Campo, Card, Modal, useToast } from "../ui";
 import { Pill } from "./Sprint2";
 import { ColorUnidad, fechaCompleta, nombreUnidad } from "./Central";
@@ -110,7 +110,8 @@ export function ModalAvancePreparacion({ datos, onClose, onHecho }) {
 }
 
 // Tarjeta de preparación de la ficha de la moto (HU-001): etapas, lo que falta, acciones e historial
-export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
+// entrega: estado de entrega de la venta vigente (HU-032), si la moto está vendida
+export function PreparacionUnidadCard({ unidad, gestiona, onCambio, entrega = null }) {
   const consulta = useConsultaCentral(() => preparacionUnidadApi(unidad.coduni), [unidad.coduni], { clave: `prep33:${unidad.coduni}` });
   const [modal, setModal] = useState(null);
   const [todos, setTodos] = useState(false);
@@ -119,7 +120,9 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
   const historial = [...(consulta.data?.historial || [])].reverse();
   // CP-006-06: con el techo del comprador por definir o sin configurar, la moto no figura lista para entrega
   const eComercial = po ? etapaComercialDe(po, unidad.techoComercial) : null;
-  const e = eComercial || etapaOperativa(po);
+  const base = eComercial || etapaOperativa(po);
+  const e = etapaConEntrega(base, entrega); // QA 18/11 (EMT-163): no «Lista para entrega» con el armado acordado pendiente
+  const porEntrega = e !== base;
   const t = po?.techo || {};
   const armada = po?.armado === "Terminado";
   const abrir = (etapa, estado) => setModal({ unidad, po, etapa, estado });
@@ -130,7 +133,7 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
           <h2 className="text-lg font-bold text-marino dark:text-white">Preparación</h2>
           <p className="text-[13px] text-slate-500">La moto se vende con o sin techo. Si se le configura un techo, aquí se registra su armado hasta que quede instalado.</p>
         </div>
-        {po && <Pill tono={e.tono}>{e.etapa}</Pill>}
+        {po && <span data-etapa-preparacion-card={e.etapa}><Pill tono={e.tono}>{e.etapa}</Pill></span>}
       </div>
       {consulta.error && !po && <div className="mt-3"><Aviso tipo="error">No se pudo cargar la preparación: {mensajeError(consulta.error)}</Aviso></div>}
       {!po && !consulta.error && <p className="mt-3 text-[13px] text-slate-400">Cargando la preparación…</p>}
@@ -156,7 +159,7 @@ export function PreparacionUnidadCard({ unidad, gestiona, onCambio }) {
           </li>
           <li className="px-4 py-3" data-etapa="Entrega">
             <p className="text-[14px] font-semibold text-marino dark:text-white">3. Condición de entrega</p>
-            <p className="text-[12.5px] text-slate-500" data-condicion-entrega={e.etapa}>{eComercial ? eComercial.nota : techoPorArmar(po) ? `Falta armar el techo (${t.configuracion}).` : armada ? "Lista para entrega. No equivale a entregada al comprador." : "Sin pendientes de techo. Para entregarla armada, falta registrar el armado. No equivale a entregada al comprador."}</p>
+            <p className="text-[12.5px] text-slate-500" data-condicion-entrega={e.etapa}>{porEntrega ? e.nota : eComercial ? eComercial.nota : techoPorArmar(po) ? `Falta armar el techo (${t.configuracion}).` : armada ? "Lista para entrega. No equivale a entregada al comprador." : "Sin pendientes de techo. Para entregarla armada, falta registrar el armado. No equivale a entregada al comprador."}</p>
           </li>
         </ol>
         {po.ultimaActualizacion && <p className="mt-2 text-[12px] text-slate-400">Última actualización: {fechaCompleta(po.ultimaActualizacion)}{po.actualizadoPor?.nombre ? `, ${po.actualizadoPor.nombre}` : ""}</p>}

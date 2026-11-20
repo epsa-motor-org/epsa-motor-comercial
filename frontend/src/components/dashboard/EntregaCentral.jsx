@@ -6,7 +6,7 @@
 // administradora o el vendedor responsable vigente); el servidor vuelve a comprobar todo al confirmar.
 // La entrega no cambia la venta, los pagos, la ubicación, el techo ni la preparación: una entrega embalada no
 // acredita el armado. Un reintento por falla de red no la duplica (clave de intento).
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { mensajeError } from "../../lib/errores";
 import { fechaLarga } from "../../lib/validar";
@@ -110,11 +110,27 @@ export function EntregaVenta({ venta, unidad, consulta, puedeEditar = true, onCa
 // Moto «Vendida» sin venta vigente: su venta se canceló después de entregarla (HU-021 con HU-032, PO 16/11)
 // ---------------------------------------------------------------------------------------------
 // consulta = useConsultaCentral de E.ventaCanceladaEntregadaApi. La entrega y la venta cancelada se muestran tal como
-// quedaron; la moto sigue bloqueada hasta que el gerente registre su retorno (no hay botones: no se edita nada aquí).
-export function VentaCanceladaEntregadaCard({ unidad, consulta }) {
+// quedaron; la moto sigue bloqueada hasta que el gerente registre su retorno. Solo el gerente ve «Registrar retorno»
+// (HU-021, PR #65 de Michelle): con el retorno confirmado la moto vuelve a ofrecerse si no tiene otro compromiso.
+// onRetorno({ venta, entrega }): la ficha abre la ventana del retorno a su nivel, así no se cierra si la moto vuelve a
+// ofrecerse mientras se muestra el resultado. Sin onRetorno, la tarjeta la abre ella misma.
+export function VentaCanceladaEntregadaCard({ unidad, consulta, onCambio, onRetorno }) {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [retornando, setRetornando] = useState(false);
+  // Si la ficha se actualiza sola con la ventana del retorno abierta (otra persona lo registró y la moto volvió a
+  // ofrecerse), esta tarjeta desaparece: se avisa en vez de cerrar la ventana en silencio
+  const abierta = useRef(false);
+  abierta.current = retornando;
+  useEffect(() => () => {
+    const enLaFicha = typeof window !== "undefined" && window.location.pathname.replace(/\/+$/, "").endsWith(`/${unidad?.coduni}`);
+    if (abierta.current && enLaFicha) toast("La ficha se actualizó mientras registrabas el retorno: la moto ya no lo espera (otra persona lo registró). Revisa el historial de cancelaciones.", "error");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const cerrarRetorno = (refrescar) => { abierta.current = false; setRetornando(false); if (refrescar) onCambio?.(); };
   const d = consulta?.data;
   const v = d?.venta;
   const c = d?.cancelacion;
+  const gerente = E.puedeRegistrarRetorno(user);
   return (
     <Card data-venta-cancelada-entregada={v?.codven || ""} data-estado={d?.entrega ? "entregada" : v ? "sin-detalle" : d ? "sin-venta" : "cargando"}>
       <div className="flex flex-wrap items-center gap-2">
@@ -140,12 +156,141 @@ export function VentaCanceladaEntregadaCard({ unidad, consulta }) {
           </dl>
           <EntregaVenta venta={{ ...v, techoNombre: v.techo?.nombre || null }} unidad={unidad} consulta={{ data: d.entrega }} puedeEditar={false} />
           <section className="mt-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4 dark:border-amber-500/30 dark:bg-amber-500/5" data-retorno="pendiente">
-            <h3 className="text-[15px] font-bold text-marino dark:text-white">Retorno de la moto</h3>
-            <p className="mt-1 text-[13px] text-slate-600 dark:text-slate-300">Pendiente de registrar. Lo registra el gerente con la fecha real del retorno, la ubicación, la condición de la moto y una observación. Al confirmarlo, la moto vuelve a ofrecerse si no tiene otro compromiso.</p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-[15px] font-bold text-marino dark:text-white">Retorno de la moto</h3>
+                <p className="mt-1 text-[13px] text-slate-600 dark:text-slate-300">Pendiente de registrar. Lo registra el gerente con la fecha real del retorno, la ubicación, la condición de la moto y una observación. Al confirmarlo, la moto vuelve a ofrecerse si no tiene otro compromiso.</p>
+              </div>
+              {gerente && <button type="button" className="btn btn-primary !py-2 text-[13px]" onClick={() => (onRetorno ? onRetorno({ venta: v, entrega: d.entrega }) : setRetornando(true))} data-registrar-retorno>Registrar retorno</button>}
+            </div>
+            {!gerente && <p className="mt-2 text-[12.5px] text-slate-500" data-nota-retorno>Solo el gerente registra el retorno.</p>}
           </section>
         </>
       )}
+      {retornando && v && d?.entrega && (
+        <RegistrarRetornoModal venta={v} unidad={unidad} entrega={d.entrega} onClose={(cambio) => cerrarRetorno(cambio)} onHecho={() => cerrarRetorno(true)} />
+      )}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Registrar el retorno físico (solo gerente). El servidor vuelve a revisar todo al confirmar; un reintento con la
+// misma clave no lo duplica. No devuelve dinero, no anula comprobantes ni borra la venta, la entrega o la cancelación.
+// ---------------------------------------------------------------------------------------------
+const VACIO_RETORNO = { fecha: "", codubi: "", condicion: "", observacion: "" };
+const TEXTO_SITUACION = { Disponible: "Libre para vender: vuelve a ofrecerse.", Separada: "Separada: conserva otro compromiso vigente.", Vendida: "Vendida: conserva otro compromiso vigente.", "No disponible": "No disponible: conserva otro bloqueo vigente." };
+
+// onClose(cambio): cambio = true si al intentar se supo que la venta cambió; la ficha se actualiza al cerrar la ventana,
+// no antes (si se actualizara con la ventana abierta, la moto ya libre haría desaparecer este resultado)
+export function RegistrarRetornoModal({ venta, unidad, entrega, onClose, onHecho }) {
+  const toast = useToast();
+  const { user } = useAuth();
+  const cambio = useRef(false);
+  const cerrar = () => onClose?.(cambio.current);
+  const clave = useIntento();
+  const hoy = S.hoyLima();
+  const fechaEntrega = V.soloFecha(entrega?.entrega?.fecha || "");
+  const [f, setF] = useState({ ...VACIO_RETORNO, fecha: hoy });
+  const [lugares, setLugares] = useState(null);
+  const [errLugares, setErrLugares] = useState("");
+  const [intentado, setIntentado] = useState(false);
+  const [enviando, setEnviando] = useState("");
+  const [error, setError] = useState("");
+  const [bloqueada, setBloqueada] = useState(false);
+  const [hecho, setHecho] = useState(null);
+  const cargarLugares = () => { setErrLugares(""); E.ubicacionesRetornoApi().then(setLugares).catch((e) => setErrLugares(mensajeError(e))); };
+  useEffect(() => { cargarLugares(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const err = E.erroresRetorno(f, { hoy, fechaEntrega });
+  const ver = (k) => (intentado ? err[k] : undefined);
+  const cambiar = (k, val) => { setF((p) => ({ ...p, [k]: val })); setError(""); };
+
+  async function enviar(ev) {
+    ev.preventDefault();
+    setIntentado(true);
+    if (Object.keys(err).length || enviando || bloqueada) return;
+    const cuerpo = E.cuerpoRetorno(f);
+    setEnviando("Registrando el retorno…"); setError("");
+    try {
+      const r = await E.registrarRetornoApi(venta.codven, cuerpo, clave(JSON.stringify(cuerpo)));
+      setHecho({ ...r.data, reutilizada: r.status === 200 || r.data?.reutilizada === true });
+      toast(r.status === 200 ? "El retorno ya estaba registrado" : "Retorno registrado");
+    } catch (e) {
+      if (sinRespuesta(e)) {
+        // Sin respuesta clara (red o error del servidor): se revisa si el retorno quedó registrado antes de pedir otra cosa
+        setEnviando("Revisando si el retorno se registró…");
+        const ahora = await E.entregaDeVentaApi(venta.codven).catch(() => undefined);
+        const ret = E.retornoDe(ahora);
+        // ¿Es este mismo retorno (con tus datos) u otro que alguien registró antes? Solo el primero es un éxito verificado
+        if (ret && E.esMismoRetorno(ret, cuerpo, user)) { setHecho({ ...ahora, reutilizada: true, verificado: true }); toast("El retorno sí quedó registrado"); }
+        else if (ret) setHecho({ ...ahora, reutilizada: true, ajeno: true });
+        else if (ahora === undefined) setError("Se perdió la conexión y no se pudo confirmar si el retorno se registró. Vuelve a pulsar «Registrar retorno»: con esta misma ventana no se registra dos veces.");
+        else if (e.status >= 500) setError(`El servidor respondió con un error (${e.status}) y el retorno no se registró: la moto sigue como estaba. Revisa que la fecha no sea futura ni anterior a la entrega y que la ubicación sea una sede o almacén activo; si los datos están bien, avisa al equipo técnico.`);
+        else setError("Se perdió la conexión y el retorno no se registró. Vuelve a pulsar «Registrar retorno»: no se duplica.");
+      } else {
+        if (e.status === 409 || e.status === 404 || e.status === 403) { setBloqueada(e.status !== 409 || /ya fue registrado|no est[aá] cancelada|entrega efectiva/i.test(e.message || "")); cambio.current = true; }
+        setError(E.textoErrorRetorno(e));
+      }
+    } finally { setEnviando(""); }
+  }
+
+  if (hecho) {
+    const r = hecho.retorno || {};
+    const situacion = hecho.estadoComercialUnidad || r.estadoComercialResultante;
+    return (
+      <Modal abierto onClose={onHecho} titulo="Retorno registrado" sinAvisoCambios pie={<button className="btn btn-primary !py-2" onClick={onHecho}>Listo</button>}>
+        <div className="space-y-3 text-[13.5px]" data-retorno-guardado={r.codretorno || ""} data-reutilizada={hecho.reutilizada ? "si" : "no"} data-situacion-resultante={situacion || ""}>
+          <Aviso tipo={hecho.ajeno ? "aviso" : "ok"}><span data-retorno-nota={hecho.ajeno ? "ajeno" : hecho.verificado ? "verificado" : hecho.reutilizada ? "repetido" : "nuevo"}>{hecho.ajeno ? `El retorno de esta venta ya lo había registrado ${hecho.retorno?.registradoPor?.nombre || "otra persona"}: no se registró otro. Estos son sus datos.` : hecho.verificado ? "El servidor no respondió bien, pero el retorno sí quedó registrado (se verificó). No se registró dos veces." : hecho.reutilizada ? "Este retorno ya estaba registrado; no se duplicó." : "La moto quedó registrada como retornada."}</span></Aviso>
+          <dl>
+            <Dato k="Fecha del retorno">{fechaLarga(r.fechaRetorno)}</Dato>
+            <Dato k="Ubicación">{r.ubicacion?.nombre || hecho.ubicacionActual?.nombre || "Sin dato"}</Dato>
+            <Dato k="Condición">{r.condicion}</Dato>
+            <Dato k="Observación">{r.observacion}</Dato>
+            <Dato k="Situación de la moto" data="situacion">{TEXTO_SITUACION[situacion] || situacion || "Sin dato"}</Dato>
+          </dl>
+          <p className="text-[12.5px] text-slate-500">Se conservan la venta cancelada, la entrega y el dinero recibido; no se registró ninguna devolución.</p>
+        </div>
+      </Modal>
+    );
+  }
+
+  const pie = (
+    <>
+      <button type="button" className="btn btn-secondary !py-2" onClick={cerrar}>Cancelar</button>
+      <button form="f-retorno" className="btn btn-primary !py-2 disabled:opacity-60" disabled={Boolean(enviando) || bloqueada || !lugares} data-retorno-enviar>{enviando || "Registrar retorno"}</button>
+    </>
+  );
+  return (
+    <Modal abierto onClose={cerrar} titulo="Registrar retorno de la moto" ancho="max-w-xl" pie={pie}
+      confirmarGuardar={{ titulo: "¿Registrar el retorno?", texto: "Queda registrado con tu nombre y ya no se modifica. La moto vuelve a ofrecerse si no tiene otro compromiso. No se devuelve dinero ni se anula el comprobante.", boton: "Sí, registrar retorno", validar: () => { setIntentado(true); return !Object.keys(err).length && !bloqueada && Boolean(lugares); } }}>
+      <form id="f-retorno" onSubmit={enviar} className="space-y-4" noValidate data-retorno-modal={venta.codven}>
+        <dl className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-[13.5px] dark:border-white/10 dark:bg-white/5">
+          <Dato k="Moto">{`${unidad?.nommod || "Moto"} · motor ${unidad?.nummotuni || "—"} · chasis ${unidad?.chauni || "—"}`}</Dato>
+          <Dato k="Venta cancelada">{`N° ${venta.codven} · ${venta.comprador?.nombre || S.textoComprador(venta.comprador) || "Sin comprador"}`}</Dato>
+          <Dato k="Entregada">{fechaEntrega ? `${fechaLarga(fechaEntrega)}${entrega?.entrega?.receptor ? `, recibió ${entrega.entrega.receptor}` : ""}` : "Sin dato"}</Dato>
+        </dl>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Campo etiqueta="Fecha real del retorno" error={ver("fecha")}>
+            <input id="ret-fecha" type="date" className="field-input" value={f.fecha} max={hoy} min={fechaEntrega || undefined} onChange={(e) => cambiar("fecha", e.target.value)} />
+          </Campo>
+          <Campo etiqueta="Dónde quedó la moto" error={ver("codubi")} ayuda="Sede o almacén de EPSA.">
+            <select id="ret-ubicacion" className="field-input" value={f.codubi} onChange={(e) => cambiar("codubi", e.target.value)} disabled={!lugares}>
+              <option value="">{lugares ? "Elige la ubicación" : errLugares ? "No se pudieron cargar" : "Cargando ubicaciones…"}</option>
+              {(lugares || []).map((l) => <option key={l.codubi} value={l.codubi}>{`${l.nombre} (${l.tipo})`}</option>)}
+            </select>
+            {errLugares && <button type="button" className="mt-1 text-[12px] font-semibold text-marino-700 hover:underline dark:text-white" onClick={cargarLugares}>Reintentar</button>}
+          </Campo>
+        </div>
+        <Campo etiqueta="Condición de la moto" error={ver("condicion")} ayuda={`Cómo volvió: estado, faltantes o daños. Hasta ${E.MAX_CONDICION} caracteres.`}>
+          <textarea id="ret-condicion" className="field-input" rows={2} maxLength={E.MAX_CONDICION + 20} value={f.condicion} onChange={(e) => cambiar("condicion", e.target.value)} placeholder="Por ejemplo: buen estado, con su techo y sin daños" />
+        </Campo>
+        <Campo etiqueta="Observación" error={ver("observacion")} ayuda={`Quién la trajo, por qué volvió u otros detalles. Hasta ${E.MAX_OBS_RETORNO} caracteres.`}>
+          <textarea id="ret-observacion" className="field-input" rows={2} maxLength={E.MAX_OBS_RETORNO + 20} value={f.observacion} onChange={(e) => cambiar("observacion", e.target.value)} />
+        </Campo>
+        <p className="text-[12.5px] text-slate-500">No se devuelve dinero ni se anula el comprobante: eso se coordina aparte. La venta cancelada y la entrega se conservan.</p>
+        {error && <Aviso tipo="error"><span data-error-retorno>{error}</span></Aviso>}
+      </form>
+    </Modal>
   );
 }
 

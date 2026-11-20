@@ -14,6 +14,7 @@ import { sinRespuesta, useConsultaCentral, useIntento } from "../../servicios/ce
 import * as C from "../../servicios/cancelacionCentral";
 import * as E from "../../servicios/entregaCentral";
 import * as S from "../../servicios/separacionCentral";
+import * as V from "../../servicios/ventaCentral";
 import { trasladoDe } from "../../servicios/inventarioCentral";
 import { Aviso, Campo, Card, Modal, useToast } from "../ui";
 import { IconCheck } from "../Icons";
@@ -102,6 +103,34 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
     return c; // null: sigue vigente; undefined: no se pudo consultar
   }
 
+  // El servidor respondió 5xx y la operación sigue vigente. Mientras los códigos PT65x de HU-021 no tengan el adaptador
+  // de PostgREST (como HU-022 en el PR #69), un conflicto llega como 500: antes de invitar a repetir, se vuelve a leer la
+  // operación y se explica lo que cambió con la ventana abierta (QA 19/11).
+  async function explicarFalla(causa, sinCancelacion = false) {
+    setEnviando("Revisando la operación…");
+    const actual = await (esVenta ? V.ventaDeUnidadApi(unidad?.coduni) : S.separacionActivaApi(unidad?.coduni)).catch(() => undefined);
+    if (actual === undefined && sinCancelacion) { setErr({ general: NO_CONFIRMADO(tipo) }); return; }
+    if (actual === undefined) { setErr({ general: `${causa} y la ${tipo} no se canceló: sigue vigente y tus datos siguen aquí. Vuelve a pulsar «${titulo}». Si se repite, avisa a soporte con la hora y la moto.` }); return; }
+    const vigente = actual && String(esVenta ? actual.codven : actual.codsep) === String(cod) && (!actual.estado || ["Registrada", "Activa"].includes(actual.estado));
+    if (actual !== undefined && !vigente) {
+      setBloqueada(true); onCambio?.();
+      setErr({ general: `${causa} y no se canceló nada: la ${tipo} cambió mientras tenías la ventana abierta (${esVenta ? "ya no es la venta vigente de esta moto" : "ya no está activa; pudo convertirse en venta"}). La ficha se actualizó.` });
+      return;
+    }
+    const rol = String(user?.rol || "").toLowerCase();
+    if (vigente && rol === "vendedor" && String(actual.responsable?.codusu ?? "") !== String(user?.codusu ?? "")) {
+      setBloqueada(true); onCambio?.();
+      setErr({ general: `No se canceló: ya no eres el responsable comercial vigente de esta ${tipo}${actual.responsable?.nombre ? ` (ahora es ${actual.responsable.nombre})` : ""}. La responsabilidad cambió mientras tenías abierta la pantalla; la cancelan su responsable, el gerente o la administradora.` });
+      return;
+    }
+    if (vigente && esVenta && !exige && C.exigeObservacion(tipo, Number(actual.totalRecibido) || 0) && !C.normalizar(observacion)) {
+      onCambio?.();
+      setErr({ observacion: "Mientras tenías la ventana abierta se registró dinero en esta venta: anota qué pasa con lo recibido.", general: `${causa} y la venta no se canceló: ahora tiene dinero recibido y hay que anotar qué pasa con él.` });
+      return;
+    }
+    setErr({ general: `${causa} y la ${tipo} no se canceló: sigue vigente y tus datos siguen aquí. No se encontró ningún cambio en la ${tipo}; puedes volver a pulsar «${titulo}» (no se registra dos veces). Si se repite, avisa a soporte con la hora y la moto.` });
+  }
+
   async function enviar(ev) {
     ev.preventDefault();
     setIntentado(true);
@@ -116,7 +145,10 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
         setEnviando("Revisando si la cancelación se guardó…");
         const causa = er?.status >= 500 ? `El servidor respondió con un error (${er.status})` : "Se perdió la conexión con el servidor";
         const r = await revisar(`${causa}, pero la cancelación sí quedó registrada en el servidor (se verificó). No se canceló dos veces.`);
-        if (r === null) setErr({ general: `${causa} y la ${tipo} no se canceló: sigue vigente y tus datos siguen aquí. Vuelve a pulsar «${titulo}». Si se repite, avisa a soporte con la hora y la moto.` });
+        // 5xx: si no se pudo leer la cancelación (a un vendedor que dejó de ser responsable el servidor se la niega), se
+        // revisa la operación igual antes de hablar de una falla de conexión
+        if ((r === null || r === undefined) && er?.status >= 500) await explicarFalla(causa, r === undefined);
+        else if (r === null) setErr({ general: `${causa} y la ${tipo} no se canceló: sigue vigente y tus datos siguen aquí. Vuelve a pulsar «${titulo}». Si se repite, avisa a soporte con la hora y la moto.` });
         else if (r === undefined) setErr({ general: NO_CONFIRMADO(tipo) });
       } else {
         const x = C.errorCancelacion(er, tipo);
@@ -209,6 +241,7 @@ export function NotaPermisoCancelar({ operacion }) {
 // Historial de cancelaciones de la moto (ficha)
 // ---------------------------------------------------------------------------------------------
 export function CancelacionesUnidadCard({ unidad, version = 0 }) {
+  const { user } = useAuth();
   const consulta = useConsultaCentral(() => C.cancelacionesDeUnidadApi(unidad.coduni), [unidad?.coduni, version], { activo: Boolean(unidad?.coduni), intervalo: 30000, clave: `cancelaciones:${unidad?.coduni}` });
   const lista = consulta.data || [];
   if (!lista.length) return null;
@@ -233,6 +266,7 @@ export function CancelacionesUnidadCard({ unidad, version = 0 }) {
                 {c.fechaOperacion ? `${C.textoTipo(c.tipoOperacion)} del ${fechaLarga(c.fechaOperacion)}. ` : ""}
                 {c.responsable?.nombre ? `Responsable: ${c.responsable.nombre}. ` : ""}<span data-moto-quedo={c.estadoComercialResultante}>La moto quedó: {C.textoEstadoMoto(c.estadoComercialResultante, "", c.tipoOperacion).replace(/^./, (x) => x.toLowerCase())}.</span>
               </p>
+              {c.tipoOperacion === "Venta" && c.estadoComercialResultante === "Vendida" && E.puedeVerEntrega(user, c) && <RetornoDeVenta codven={c.codOperacion} />}
             </li>
           );
         })}
@@ -271,10 +305,26 @@ export function DetalleCancelacionModal({ tipo = C.VENTA, cod, titulo, onClose }
   );
 }
 
-// Entrega que se conservó al cancelar una venta ya entregada (fecha y quién la recibió)
+// Entrega que se conservó al cancelar una venta ya entregada (fecha y quién la recibió) y, si ya volvió, su retorno
 function EntregaConservada({ codven }) {
   const consulta = useConsultaCentral(() => E.entregaDeVentaApi(codven), [codven], { clave: `entrega:${codven}` });
   const ent = consulta.data?.entrega;
+  const ret = E.retornoDe(consulta.data);
   if (!ent) return null;
-  return <Dato k="Entrega conservada" data="entrega-conservada">{`${fechaLarga(ent.fecha)}, en ${ent.sedeEfectiva?.nombre || ent.sedeAcordada?.nombre || "la sede acordada"}; recibió ${ent.receptor}. Su retorno lo registra el gerente.`}</Dato>;
+  return (
+    <>
+      <Dato k="Entrega conservada" data="entrega-conservada">{`${fechaLarga(ent.fecha)}, en ${ent.sedeEfectiva?.nombre || ent.sedeAcordada?.nombre || "la sede acordada"}; recibió ${ent.receptor}.${ret ? "" : " Su retorno lo registra el gerente."}`}</Dato>
+      {ret && <Dato k="Retorno" data="retorno">{textoRetorno(ret)}</Dato>}
+    </>
+  );
+}
+const textoRetorno = (r) => `${fechaLarga(r.fechaRetorno)}, a ${r.ubicacion?.nombre || "una ubicación EPSA"}. Condición: ${r.condicion}. Observación: ${r.observacion}. Lo registró ${r.registradoPor?.nombre || "el gerente"}${r.registradoEn ? ` el ${fechaCompleta(r.registradoEn)}` : ""}.`;
+// Línea del historial: retorno registrado o pendiente de una venta cancelada después de entregarla
+function RetornoDeVenta({ codven }) {
+  const consulta = useConsultaCentral(() => E.entregaDeVentaApi(codven), [codven], { clave: `entrega:${codven}` });
+  if (!consulta.data?.entrega) return null;
+  const ret = E.retornoDe(consulta.data);
+  return ret
+    ? <p className="mt-1 text-[12.5px]" data-retorno-registrado={ret.codretorno || ""}><span className="text-slate-500">Retorno:</span> {textoRetorno(ret)}</p>
+    : <p className="mt-1 text-[12.5px] text-amber-700 dark:text-amber-300" data-retorno-pendiente>Ya se había entregado: falta registrar su retorno (gerente).</p>;
 }

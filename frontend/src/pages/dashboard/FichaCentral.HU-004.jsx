@@ -15,7 +15,7 @@ import { MAX_DETALLE_TECHO, TIPOS_TECHO } from "../../data/mockData";
 import * as api from "../../lib/api";
 import { mensajeError } from "../../lib/errores";
 import { unidadCentralApi, useConsultaCentral } from "../../servicios/central";
-import { preparacionDe, techoDe, trasladoDe, ubicacionDe } from "../../servicios/inventarioCentral";
+import { etapaConEntrega, preparacionDe, techoDe, trasladoDe, ubicacionDe } from "../../servicios/inventarioCentral";
 import { Aviso, Campo, Card, PageHeader, useConfirm, useToast } from "../../components/ui";
 import { AvisoConexion, BarraActualizacion, PillComercial, PillPreparacion, capital } from "../../components/dashboard/Central";
 import MovimientosUnidad from "../../components/dashboard/MovimientosUnidad";
@@ -25,6 +25,7 @@ import { sePuedeSeparar } from "../../servicios/separacionCentral";
 import VenderMotoCentral, { VentaCard } from "../../components/dashboard/VenderCentral";
 import { sePuedeVender } from "../../servicios/ventaCentral";
 import { CancelacionesUnidadCard, CancelarOperacionModal } from "../../components/dashboard/CancelarCentral";
+import { RegistrarRetornoModal } from "../../components/dashboard/EntregaCentral";
 import { SEPARACION, VENTA } from "../../servicios/cancelacionCentral";
 import { CorreccionesUnidadCard, CorregirVentaModal } from "../../components/dashboard/CorregirCentral";
 const DESCRIPCION_TECHO = {
@@ -48,6 +49,7 @@ function FichaCentral({ id }) {
   const [separando, setSeparando] = useState(false);
   const [vendiendo, setVendiendo] = useState(false);
   const [cancelando, setCancelando] = useState(null);
+  const [retornando, setRetornando] = useState(null); // HU-021: { venta, entrega } de la venta cancelada ya entregada
   const [versionCancelaciones, setVersionCancelaciones] = useState(0);
   const [corrigiendo, setCorrigiendo] = useState(null);
   const [versionCorrecciones, setVersionCorrecciones] = useState(0);
@@ -91,7 +93,8 @@ function FichaCentral({ id }) {
   const x = ubicacionDe(u);
   const p = u.preparacion;
   const t = techoDe(p);
-  const prep = preparacionDe(p);
+  const entregaVigente = u.comercial === "Vendida" ? entregaVenta : null; // la de una venta anterior no cuenta si la moto ya no está vendida
+  const prep = etapaConEntrega(preparacionDe(p), entregaVigente); // HU-032: con la venta vigente, según su entrega acordada
   // Un traslado no bloquea la venta (PO, 14/11): libre en camino se puede separar o vender; el traslado sigue
   const traslado = trasladoDe(u);
   const textoSituacion = { Libre: traslado ? `${traslado}. Se puede separar o vender; el traslado sigue y no la deja lista para entregar.` : "Libre para vender, con o sin techo.", "No disponible": "Todavía no está a la venta.", Separada: "Tiene una separación activa.", Vendida: entregaVenta?.estado === "Entregada" && entregaVenta?.estadoVenta === "Cancelada" ? "Su venta se canceló después de entregarla: queda bloqueada hasta que el gerente registre su retorno." : entregaVenta?.estado === "Entregada" ? "Entregada al comprador." : entregaVenta?.estado === "Lista para entrega" || entregaVenta?.estado === "Lista para entrega embalada" ? `Vendida, ${entregaVenta.estado.toLowerCase()}.` : "Vendida, pendiente de entrega." }[u.comercial] || "";
@@ -107,7 +110,7 @@ function FichaCentral({ id }) {
       <AvisoConexion consulta={consulta} que="la ficha de la unidad" />
       <div className="mb-6 grid gap-4 md:grid-cols-3" data-ejes>
         <Card data-eje="ubicacion"><p className="text-[12px] font-semibold text-slate-400">Ubicación registrada</p><p className={`mt-1 text-[1.25rem] font-bold ${x.transito ? "text-sky-700 dark:text-sky-300" : x.sin ? "text-amber-700 dark:text-amber-300" : "text-marino dark:text-white"}`}>{x.texto}</p><p className="text-[12.5px] text-slate-500">{x.detalle}</p></Card>
-        <Card data-eje="preparacion"><p className="text-[12px] font-semibold text-slate-400">Preparación</p><div className="mt-1.5"><PillPreparacion preparacion={p} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{entregaVenta?.estado === "Entregada" ? "La moto ya se entregó al comprador." : prep.nota || `Techo: ${t.config}`}</p></Card>
+        <Card data-eje="preparacion"><p className="text-[12px] font-semibold text-slate-400">Preparación</p><div className="mt-1.5" data-etapa-cabecera={prep.etapa}><PillPreparacion preparacion={p} entrega={entregaVigente} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{prep.nota || `Techo: ${t.config}`}</p></Card>
         <Card data-eje="comercial"><p className="text-[12px] font-semibold text-slate-400">Situación comercial</p><div className="mt-1.5"><PillComercial comercial={u.comercial} /></div><p className="mt-1.5 text-[12.5px] text-slate-500">{textoSituacion}</p>{separa && (sePuedeSeparar(u) || (sePuedeVender(u) && u.comercial === "Libre")) && (
           <div className="mt-3 flex flex-wrap gap-2">
             {sePuedeSeparar(u) && <button className="btn btn-primary !py-2 text-[13px]" onClick={() => setSeparando(true)} data-separar-ficha>Separar esta moto</button>}
@@ -116,17 +119,18 @@ function FichaCentral({ id }) {
         )}</Card>
       </div>
       {u.comercial === "Separada" && <div className="mb-6"><SeparacionActivaCard unidad={u} puedeTecho={separa} onCambio={recargar} onVender={separa && sePuedeVender(u) ? () => setVendiendo(true) : undefined} onCancelar={(s) => setCancelando({ tipo: SEPARACION, operacion: s })} /></div>}
-      {u.comercial === "Vendida" && <div className="mb-6"><VentaCard unidad={u} puedeEditar={separa} onCambio={recargar} onEntrega={setEntregaVenta} version={versionCorrecciones} onCancelar={(v) => setCancelando({ tipo: VENTA, operacion: v })} onCorregir={(v) => setCorrigiendo(v)} /></div>}
+      {u.comercial === "Vendida" && <div className="mb-6"><VentaCard unidad={u} puedeEditar={separa} onCambio={recargar} onEntrega={setEntregaVenta} onRetorno={setRetornando} version={versionCorrecciones} onCancelar={(v) => setCancelando({ tipo: VENTA, operacion: v })} onCorregir={(v) => setCorrigiendo(v)} /></div>}
       <div className="mb-6 empty:hidden"><CancelacionesUnidadCard unidad={u} version={versionCancelaciones} /></div>
       <div className="mb-6 empty:hidden"><CorreccionesUnidadCard unidad={u} version={versionCorrecciones} /></div>
-      <div className="mb-6"><PreparacionUnidadCard unidad={u} gestiona={gestiona} onCambio={recargar} /></div>
+      <div className="mb-6"><PreparacionUnidadCard unidad={u} gestiona={gestiona} onCambio={recargar} entrega={entregaVigente} /></div>
       <div className="grid gap-6 xl:grid-cols-[1fr_1.15fr]">
         <MovimientosUnidad unidad={u} gestiona={gestiona} ubicaciones={ubicaciones} onCambio={recargar} />
-        <ConfigTecho unidad={u} gestiona={gestiona} onGuardado={recargar} ventaCancelada={entregaVenta?.estadoVenta === "Cancelada" ? entregaVenta : null} />
+        <ConfigTecho unidad={u} gestiona={gestiona} onGuardado={recargar} ventaCancelada={entregaVigente?.estadoVenta === "Cancelada" ? entregaVigente : null} />
       </div>
       {separando && <SepararMotoCentral unidad={u} onClose={() => setSeparando(false)} onHecho={recargar} onConflicto={recargar} />}
       {vendiendo && <VenderMotoCentral unidad={u} onClose={() => setVendiendo(false)} onHecho={recargar} onConflicto={recargar} />}
       {corrigiendo && <CorregirVentaModal venta={corrigiendo} unidad={u} onClose={() => setCorrigiendo(null)} onHecho={() => { recargar(); setVersionCorrecciones((n) => n + 1); }} onCambio={() => { recargar(); setVersionCorrecciones((n) => n + 1); }} />}
+      {retornando && <RegistrarRetornoModal venta={retornando.venta} unidad={u} entrega={retornando.entrega} onClose={(cambio) => { setRetornando(null); if (cambio) { recargar(); setVersionCancelaciones((n) => n + 1); } }} onHecho={() => { setRetornando(null); recargar(); setVersionCancelaciones((n) => n + 1); }} />}
       {cancelando && <CancelarOperacionModal tipo={cancelando.tipo} operacion={cancelando.operacion} unidad={u} onClose={() => setCancelando(null)} onHecho={() => { recargar(); setVersionCancelaciones((n) => n + 1); }} onCambio={recargar} />}
     </div>
   );
