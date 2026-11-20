@@ -107,6 +107,26 @@ test('HU-021 HTTP: vendedor ajeno es rechazado por la RPC y errores de negocio n
   });
 });
 
+test('HU-021 HTTP: mapea cada código SQL de cancelación y deja errores desconocidos como 500 genérico', async () => {
+  const casos: Array<[string, number]> = [
+    ['PT650', 400], ['PT651', 404], ['PT652', 403], ['PT653', 409], ['PT654', 409],
+    ['PT655', 422], ['PT656', 422], ['PT657', 409], ['PT658', 409], ['PT659', 409], ['XX000', 500]
+  ];
+  let intento = 0;
+  await entorno(async (base, llamadas) => {
+    for (const [codigo, status] of casos) {
+      const response = await request(base, '/api/ventas/82/cancelacion', 'gerente');
+      assert.equal(response.status, status, codigo);
+      assert.ok(!JSON.stringify(response.body).includes('detalle SQL privado'));
+      if (codigo === 'XX000') assert.equal(response.body.message, 'Error interno al cancelar la operación');
+    }
+    assert.equal(llamadas.length, casos.length);
+    assert.ok(llamadas.every(llamada => llamada.name === 'hu021_cancelar_venta'));
+  }, () => ({ data: null, error: {
+    code: casos[intento++]?.[0], message: 'detalle SQL privado', details: 'no exponer', hint: 'no exponer'
+  } }));
+});
+
 test('HU-021 CP-021-02 HTTP: vendedor ajeno al responsable vigente no puede cancelar la venta', async () => {
   await entorno(async (base, llamadas) => {
     const response = await request(base, '/api/ventas/82/cancelacion', 'vendedor');
