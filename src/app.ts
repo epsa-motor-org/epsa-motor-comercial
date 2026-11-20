@@ -22,6 +22,7 @@ import { crearRutasReintentoTechoSeparacion, crearRutasSeparacion } from './rout
 import { crearRutasSeparacionApoyo } from './routes/separacion.apoyo.routes';
 import { crearRutasTechoVenta, crearRutasVenta } from './routes/venta.routes';
 import type { FabricaClienteIntegracion } from './middleware/integracion.hmac';
+import { crearRutasPedido } from './routes/pedido.routes';
 
 export function crearApp(fabrica?: FabricaCliente, fabricaPublica?: FabricaClientePublico, fabricaIntegracion?: FabricaClienteIntegracion) {
   const app = express();
@@ -33,6 +34,7 @@ export function crearApp(fabrica?: FabricaCliente, fabricaPublica?: FabricaClien
   app.use('/api/techos', crearRutasTechoPublico(fabricaPublica));
   app.use('/api/leads', crearRutasLead(fabrica));
   app.use('/api/ventas', crearRutasTechoVenta(fabrica));
+  app.use('/api/pedidos', crearRutasPedido(fabrica));
   app.use('/api/inventario', crearRutasInventario(fabrica));
   app.use('/api/compras-pendientes', crearRutasComprasPendientes(fabrica));
   app.use(

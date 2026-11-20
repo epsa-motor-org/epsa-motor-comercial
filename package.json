@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "test": "tsx --test tests/*.test.ts",
-    "test:hu006:postgrest": "tsx scripts/qa-hu006-postgrest.ts"
+    "test:hu006:postgrest": "tsx scripts/qa-hu006-postgrest.ts",
+    "test:hu031:postgrest": "tsx scripts/qa-hu031-postgrest.ts"
   },
   "repository": {
     "type": "git",

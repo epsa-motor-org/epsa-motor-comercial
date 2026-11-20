@@ -833,7 +833,7 @@ export function VentaCard({ unidad, puedeEditar = true, onCambio, onCancelar, on
           {Number(vta.descuento) > 0 && <Fila k="Importe antes del descuento" data="antes"><span className="cifra">{S.soles(vta.importeAntesDescuento)}</span></Fila>}
           {Number(vta.descuento) > 0 && <Fila k="Descuento autorizado" data="descuento"><span className="cifra" data-descuento-venta={vta.descuento}>− {S.soles(vta.descuento)}</span>{vta.motivoDescuento ? `. Motivo: ${vta.motivoDescuento}` : ""}<span className="mt-0.5 block text-[12px] font-normal text-slate-500" data-autorizacion-descuento>{V.textoAutorizacion(vta)}</span></Fila>}
           <Fila k="Total de la venta" data="total"><span className="cifra" data-total-venta={vta.importe}>{S.soles(vta.importe)}</span></Fila>
-          {a && <Fila k="Adelanto de la separación"><span className="cifra">{S.soles(a.monto)}</span>{` en ${String(a.medioPago).toLowerCase()}${a.fechaPago ? `, del ${fechaLarga(a.fechaPago)}` : ""}. Se cuenta una sola vez.`}</Fila>}
+          {a && <Fila k={a.medioPago === "Adelanto de pedido" ? "Adelanto original del pedido" : "Adelanto de la separación"}><span className="cifra">{S.soles(a.monto)}</span>{a.medioPago === "Adelanto de pedido" ? ". Recibos y confirmaciones originales en Pedidos sin unidad; no es un nuevo cobro." : ` en ${String(a.medioPago).toLowerCase()}${a.fechaPago ? `, del ${fechaLarga(a.fechaPago)}` : ""}. Se cuenta una sola vez.`}</Fila>}
           <Fila k="Pagos">
             {vta.pagos?.length ? (
               <ul className="space-y-1">

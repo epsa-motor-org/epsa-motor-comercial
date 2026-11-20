@@ -559,7 +559,8 @@ export function SeparacionActivaCard({ unidad, puedeTecho = true, onCambio, onVe
   const filas = s ? [
     ["Comprador", S.textoComprador(s.comprador) || "Sin dato"],
     ["Adelanto", `${S.soles(s.monto)} en ${String(s.medioPago).toLowerCase()}${s.referencia ? `, operación ${s.referencia}` : ""}${s.fechaPago ? `, del ${fechaLarga(s.fechaPago)}` : ""}`],
-    [s.medioPago === "Transferencia" ? "Ingreso confirmado por" : "Recibido por", s.confirmador ? `${s.confirmador.nombre}${s.fechaConfirmacion ? `, ${fechaCompleta(s.fechaConfirmacion)}` : ""}` : "Sin constancia"],
+    [s.medioPago === "Adelanto de pedido" ? "Vinculado por" : s.medioPago === "Transferencia" ? "Ingreso confirmado por" : "Recibido por", s.confirmador ? `${s.confirmador.nombre}${s.fechaConfirmacion ? `, ${fechaCompleta(s.fechaConfirmacion)}` : ""}` : "Sin constancia"],
+    ...(s.medioPago === "Adelanto de pedido" ? [["Origen del dinero", "Recibos originales en Pedidos sin unidad. Vincular el pedido no genera otro cobro."]] : []),
     ["Responsable", s.responsable?.nombre || "Sin responsable"],
     ["Registrada", `${fechaCompleta(s.fechaRegistro)}${s.autor ? `, por ${s.autor.nombre}` : ""}`],
     ...(s.observacion ? [["Observación", s.observacion]] : []),
