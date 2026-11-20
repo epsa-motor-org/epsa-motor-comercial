@@ -44,6 +44,7 @@ const Equipo = diferido(() => import("./pages/dashboard/Equipo"));
 const RolesPermisos = diferido(() => import("./pages/dashboard/RolesPermisos"));
 const SeguimientoCentral = diferido(() => import("./components/dashboard/SeguimientoCentral"));
 const VentasCentral = diferido(() => import("./components/dashboard/VentasCentral"));
+const PedidosCentral = diferido(() => import("./components/dashboard/PedidosCentral"));
 const Disponibilidad = diferido(() => import("./pages/dashboard/Disponibilidad.HU-001"));
 const Movimientos = diferido(() => import("./pages/dashboard/Movimientos.HU-003"));
 const Separaciones = diferido(() => import("./pages/dashboard/Separaciones.HU-005"));
@@ -108,6 +109,7 @@ export default function App() {
                   con la base conectada avisan que no están disponibles (sin datos de ejemplo) */}
               <Route path="seguimiento" element={<P s="seguimiento">{MODO_REAL ? <SeguimientoCentral /> : <Seguimiento />}</P>} />
               <Route path="ventas" element={<P s="ventas">{MODO_REAL ? <VentasCentral /> : <Ventas />}</P>} />
+              <Route path="pedidos" element={<P s="ventas"><PedidosCentral /></P>} />
               <Route path="disponibilidad" element={<P s="disponibilidad">{MODO_REAL ? <DisponibilidadCentral /> : <Disponibilidad />}</P>} />
               {/* HU-005 ya no es del Sprint 2: solo en la vista previa */}
               <Route path="separaciones" element={MODO_REAL ? <Navigate to="/admin/disponibilidad" replace /> : <P s="separaciones"><Separaciones /></P>} />

@@ -48,6 +48,7 @@ export default function VentasCentral() {
   return (
     <div data-ventas-central>
       <PageHeader titulo="Ventas a clientes" subtitulo="Ventas registradas con su comprador, moto, total con techo, lo recibido y el saldo. Son las mismas que se ven en la ficha de cada moto; las canceladas se conservan marcadas.">
+        <Link to="/admin/pedidos" className="btn btn-secondary !py-2.5">Pedidos sin unidad</Link>
         {registra && <button className="btn btn-primary !py-2.5" onClick={() => setEligiendo(true)} data-registrar-venta>+ Registrar venta</button>}
       </PageHeader>
       <AvisoConexion consulta={consulta} que="las ventas" />
