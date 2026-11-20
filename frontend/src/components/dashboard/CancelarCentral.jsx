@@ -190,7 +190,7 @@ export function CancelarOperacionModal({ tipo, operacion: op, unidad, onClose, o
   }
 
   return (
-    <Modal abierto onClose={onClose} titulo={titulo} ancho="max-w-xl" sinAvisoCambios={Boolean(enviando)}
+    <Modal abierto onClose={onClose} titulo={titulo} ancho="max-w-xl" sinAvisoCambios={Boolean(enviando) || bloqueada}
       confirmarGuardar={{ titulo: `¿${titulo}?`, texto: `Queda cancelada con tu nombre y la fecha, y no se puede deshacer. ${esVenta ? "La venta" : "La separación"} y su dinero se conservan; la moto queda libre para vender si no tiene otro compromiso. Si está en traslado, el traslado sigue igual.${esVenta ? " Si la moto ya se entregó, la entrega se conserva y la moto queda bloqueada hasta que el gerente registre su retorno." : ""}`, boton: `Sí, ${titulo.toLowerCase()}`, validar: () => { setIntentado(true); const ok = !e.motivo && !e.observacion && !bloqueada; if (!ok) irAlError(e.motivo ? "can-motivo" : e.observacion ? "can-observacion" : ""); return ok; } }}
       pie={<>
         <button type="button" className="btn btn-secondary !py-2" onClick={onClose} data-volver-cancelacion>Volver</button>
