@@ -285,7 +285,7 @@ export function CorregirVentaModal({ venta: vta, unidad, onClose, onHecho, onCam
       </>;
 
   return (
-    <Modal abierto onClose={onClose} titulo={titulo} ancho="max-w-2xl" sinAvisoCambios={Boolean(enviando)} pie={pie}>
+    <Modal abierto onClose={onClose} titulo={titulo} ancho="max-w-2xl" sinAvisoCambios={Boolean(enviando) || bloqueada || bloqueoEntrega} pie={pie}>
       <div className="space-y-4" data-corregir-modal={vta.codven}>
         {errCarga && !p && <Aviso tipo="error">{C.errorCorreccion(errCarga).texto}</Aviso>}
         {!p && !errCarga && <p className="text-[13.5px] text-slate-500">Cargando la venta…</p>}

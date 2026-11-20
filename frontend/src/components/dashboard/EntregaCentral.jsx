@@ -261,7 +261,7 @@ export function RegistrarRetornoModal({ venta, unidad, entrega, onClose, onHecho
     </>
   );
   return (
-    <Modal abierto onClose={cerrar} titulo="Registrar retorno de la moto" ancho="max-w-xl" pie={pie}
+    <Modal abierto onClose={cerrar} titulo="Registrar retorno de la moto" ancho="max-w-xl" pie={pie} sinAvisoCambios={bloqueada}
       confirmarGuardar={{ titulo: "¿Registrar el retorno?", texto: "Queda registrado con tu nombre y ya no se modifica. La moto vuelve a ofrecerse si no tiene otro compromiso. No se devuelve dinero ni se anula el comprobante.", boton: "Sí, registrar retorno", validar: () => { setIntentado(true); return !Object.keys(err).length && !bloqueada && Boolean(lugares); } }}>
       <form id="f-retorno" onSubmit={enviar} className="space-y-4" noValidate data-retorno-modal={venta.codven}>
         <dl className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-[13.5px] dark:border-white/10 dark:bg-white/5">
@@ -361,7 +361,7 @@ export function RegistrarEntregaModal({ venta, unidad, estado, onClose, onHecho,
     </>
   );
   return (
-    <Modal abierto onClose={onClose} titulo="Registrar entrega" ancho="max-w-xl" pie={pie}
+    <Modal abierto onClose={onClose} titulo="Registrar entrega" ancho="max-w-xl" pie={pie} sinAvisoCambios={bloqueada}
       confirmarGuardar={{ titulo: "¿Registrar la entrega?", texto: `Queda como entrega efectiva a ${comprador || "el comprador"} y ya no se modifica. No cambia la venta, los pagos ni la preparación.`, boton: "Sí, registrar entrega", validar: () => { setIntentado(true); return !Object.keys(err).length && !bloqueada; } }}>
       <form id="f-entrega" onSubmit={enviar} className="space-y-4" noValidate data-entrega-modal={venta.codven}>
         <dl className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-[13.5px] dark:border-white/10 dark:bg-white/5">

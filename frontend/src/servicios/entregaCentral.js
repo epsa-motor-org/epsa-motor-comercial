@@ -104,6 +104,8 @@ export const cuerpoRetorno = (f) => ({ fechaRetorno: f.fecha, codubi: Number(f.c
 export function textoErrorRetorno(e) {
   const m = String(e?.message || "");
   if (e?.status === 403) return "Solo el gerente registra el retorno de la moto.";
+  // La API publicada (Render) todavía no tiene la ruta del retorno: no es un problema de la venta (QA 20/11)
+  if (e?.detalle?.sinRuta) return "El registro del retorno todavía no está publicado en el servidor. No se registró nada: avisa al equipo para que lo despliegue.";
   if (e?.status === 404) return "No se encontró la venta o su moto. Actualiza la ficha.";
   if (/ya fue registrado/i.test(m)) return "El retorno de esta moto ya estaba registrado. No se registró otro.";
   if (/Idempotency/i.test(m)) return "Este intento ya se usó con otros datos. Cierra la ventana y vuelve a registrar el retorno.";
@@ -126,6 +128,8 @@ export const BLOQUEO_RETORNO = "La venta se canceló después de entregar la mot
 export const MAX_RECEPTOR = 200;
 export const MAX_OBSERVACION = 1000;
 export const MAX_GUIA = 250;
+// Caracteres de control: se rechazan a propósito (QA 20/11 pidió quitar la advertencia del lint)
+// eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/;
 const limpio = (t) => S.limpio(String(t ?? "").replace(/\s+/g, " "));
 

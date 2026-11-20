@@ -119,7 +119,7 @@ function FichaCentral({ id }) {
         )}</Card>
       </div>
       {u.comercial === "Separada" && <div className="mb-6"><SeparacionActivaCard unidad={u} puedeTecho={separa} onCambio={recargar} onVender={separa && sePuedeVender(u) ? () => setVendiendo(true) : undefined} onCancelar={(s) => setCancelando({ tipo: SEPARACION, operacion: s })} /></div>}
-      {u.comercial === "Vendida" && <div className="mb-6"><VentaCard unidad={u} puedeEditar={separa} onCambio={recargar} onEntrega={setEntregaVenta} onRetorno={setRetornando} version={versionCorrecciones} onCancelar={(v) => setCancelando({ tipo: VENTA, operacion: v })} onCorregir={(v) => setCorrigiendo(v)} /></div>}
+      {u.comercial === "Vendida" && <div className="mb-6"><VentaCard unidad={u} puedeEditar={separa} onCambio={recargar} onEntrega={setEntregaVenta} onRetorno={setRetornando} version={versionCorrecciones + versionCancelaciones} onCancelar={(v) => setCancelando({ tipo: VENTA, operacion: v })} onCorregir={(v) => setCorrigiendo(v)} /></div>}
       <div className="mb-6 empty:hidden"><CancelacionesUnidadCard unidad={u} version={versionCancelaciones} /></div>
       <div className="mb-6 empty:hidden"><CorreccionesUnidadCard unidad={u} version={versionCorrecciones} /></div>
       <div className="mb-6"><PreparacionUnidadCard unidad={u} gestiona={gestiona} onCambio={recargar} entrega={entregaVigente} /></div>
