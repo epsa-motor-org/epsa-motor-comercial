@@ -11,7 +11,7 @@ import { PGlite } from '@electric-sql/pglite';
 // historial de cancelaciones de la moto y reventa de la misma moto.
 
 interface Valor<T> { r: T }
-interface ErrorSQL { code?: string; message?: string }
+interface ErrorSQL { code?: string; message?: string; detail?: string }
 interface TipoPublico { codtte: string; nombre: string; adicionalReferencial: number; sinTecho: boolean }
 
 const leer = (ruta: string) => readFileSync(ruta, 'utf8');
@@ -53,7 +53,27 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   };
   const escalar = async <T>(sql: string, params: unknown[] = []): Promise<T> =>
     (await db.query<Valor<T>>(sql, params)).rows[0]!.r;
-  const error = (codigo: string) => (e: unknown) => (e as ErrorSQL).code === codigo;
+  const jsonError = (valor?: string): Record<string, unknown> | null => {
+    if (!valor) return null;
+    try {
+      const resultado: unknown = JSON.parse(valor);
+      return typeof resultado === 'object' && resultado !== null
+        ? resultado as Record<string, unknown> : null;
+    } catch { return null; }
+  };
+  const error = (codigo: string) => (e: unknown) => {
+    const valor = e as ErrorSQL;
+    if (valor.code === codigo) return true;
+    return valor.code === 'PGRST' && jsonError(valor.message)?.code === codigo;
+  };
+  const errorHttp = (codigo: string, status: number) => (e: unknown) => {
+    const valor = e as ErrorSQL;
+    const mensaje = valor.code === 'PGRST' ? jsonError(valor.message) : null;
+    const detalle = jsonError(valor.detail);
+    return mensaje?.code === codigo && mensaje.details === null && mensaje.hint === null
+      && detalle?.status === status
+      && (status !== 500 || mensaje.message === 'Error interno al procesar la corrección de la venta');
+  };
   const hoy = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date());
   const venta = (coduni: string, techo: unknown, adicional: number | null = null, clave = randomUUID(), descuento?: {
     monto: number; motivo: string; autorizador: number; confirmacion: boolean;
@@ -120,6 +140,9 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   await db.exec(leer('supabase/migrations/202611140005_movimiento_situacion_fisica_comercial.sql'));
   await db.exec(leer('supabase/migrations/202611150002_hu005_hu006_reglas_po.sql'));
   await db.exec(leer('supabase/migrations/202611150002_hu005_hu006_reglas_po.sql'));
+  await db.exec(leer('supabase/migrations/202611150003_hu032_entrega_moto_vendida.sql'));
+  await db.exec(leer('supabase/migrations/202611190001_hu021_retorno_fisico.sql'));
+  await db.exec(leer('supabase/migrations/202611190002_hu022_transporte_errores_postgrest.sql'));
   await db.exec(`INSERT INTO auth.users(id) VALUES ${UUIDS.map(id => `('${id}')`).join(',')};
     INSERT INTO public.rol(nomrol,estrol) VALUES ('Gerente',true),('Administradora',true),('Vendedor',true);
     INSERT INTO public.usuario(uuidusu,codrol,nomusu,apepatusu,corusu,estusu)
@@ -159,6 +182,20 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
   const tipo = await propietario(async () => Object.fromEntries((await db.query<{ nomtte: string; codtte: string }>(
     'SELECT nomtte,codtte::text FROM public.tipotecho')).rows.map(f => [f.nomtte, f.codtte])));
   await t.after(() => db.close());
+
+  await t.test('HU-022: las RPC públicas adaptan códigos PT y no los lanzan como SQLSTATE HTTP', async () => {
+    const definiciones = await propietario(async () => (await db.query<{ proname: string; prosrc: string }>(
+      "SELECT proname, prosrc FROM pg_catalog.pg_proc "
+      + "WHERE pronamespace = 'public'::regnamespace "
+      + "AND proname IN ('hu022_corregir_venta', 'hu022_intercambiar_ventas')"
+    )).rows);
+    assert.equal(definiciones.length, 2);
+    for (const funcion of definiciones) {
+      assert.match(funcion.prosrc, /hu022_(?:corregir_venta|intercambiar_ventas)_negocio/);
+      assert.doesNotMatch(funcion.prosrc,
+        /RAISE\s+(?:EXCEPTION\s+USING\s+ERRCODE\s*=|SQLSTATE)\s*['"]PT\d{3}/i);
+    }
+  });
 
   await t.test('Catálogo único: público (anon) y en el formulario del panel, con el adicional referencial y en orden', async () => {
     await db.exec('RESET ROLE; SET ROLE anon');
@@ -550,7 +587,7 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     const replay = await corregirRelacion(String(ventaBase.codven), '2', null, 1, 'Comprador capturado mal', clave);
     assert.equal(replay.reutilizada, true);
     await assert.rejects(corregirRelacion(String(ventaBase.codven), '3', null, 1, 'Otro payload', clave), error('PT687'));
-    await assert.rejects(corregirRelacion(String(ventaBase.codven), '3', null, 1), error('PT683'));
+    await assert.rejects(corregirRelacion(String(ventaBase.codven), '3', null, 1), errorHttp('PT683', 409));
     const fila = await propietario(() => escalar<{ codcli: string; hu022_versionrelacion: number }>(
       "SELECT jsonb_build_object('codcli',codcli::text,'hu022_versionrelacion',hu022_versionrelacion) r FROM public.venta WHERE codven=$1", [ventaBase.codven]));
     assert.deepEqual(fila, { codcli: '2', hu022_versionrelacion: 2 });
@@ -727,7 +764,7 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
        VALUES ($1,1,3,'Efectivo',100,NULL,3,$2,true,3,now(),$3,'Separación sintética de conflicto') RETURNING codsep::text r`,
       [u[14],hoy,randomUUID()]));
     await assert.rejects(escalar('SELECT public.hu022_intercambiar_ventas($1,NULL,$2,2,$3,NULL,$4,2,$5,$6::uuid) r',
-      [ventaA.codven,u[14],ventaB.codven,u[15],'Existe un tercer compromiso',randomUUID()]), error('PT685'));
+      [ventaA.codven,u[14],ventaB.codven,u[15],'Existe un tercer compromiso',randomUUID()]), errorHttp('PT685', 409));
     await propietario(() => db.query('DELETE FROM public.separacion WHERE codsep=$1', [separacionTercera]));
     const evento = await propietario(() => escalar<{ eventos: number; detalles: number }>(
       "SELECT jsonb_build_object('eventos',count(DISTINCT e.codcor)::int,'detalles',count(d.coddet)::int) r FROM public.hu022_correccion_relacion e JOIN public.hu022_correccion_relacion_detalle d USING(codcor) WHERE d.codven=ANY($1::bigint[])", [[ventaA.codven,ventaB.codven]]));
@@ -746,7 +783,7 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
       CREATE TRIGGER hu022_fallar_auditoria_test BEFORE INSERT ON public.hu022_correccion_relacion
       FOR EACH ROW EXECUTE FUNCTION public.hu022_fallar_auditoria_test();`));
     await login(1);
-    await assert.rejects(corregirRelacion(String(ventaBase.codven), '2', null, 1), error('PT699'));
+    await assert.rejects(corregirRelacion(String(ventaBase.codven), '2', null, 1), errorHttp('PT699', 500));
     const fila = await propietario(() => escalar<{ codcli: string; version: number; estado: string }>(
       "SELECT jsonb_build_object('codcli',v.codcli::text,'version',v.hu022_versionrelacion,'estado',u.estcomuni) r FROM public.venta v JOIN public.unidad u USING(coduni) WHERE v.codven=$1", [ventaBase.codven]));
     assert.deepEqual(fila, { codcli: '1', version: 1, estado: 'Vendida' });
@@ -781,7 +818,7 @@ test('HU-005/HU-006 PostgreSQL: techo configurado, catálogo único y configurac
     const ventaTecho = await venta(extra[5]!, { decision: 'Sin techo' });
     await login(1);
     // Techo instalado distinto del acuerdo: bloquea con el mismo código de separación y venta (202611140004)
-    await assert.rejects(corregirRelacion(String(ventaTecho.codven), null, extra[4]!, 1), error('PT438'));
+    await assert.rejects(corregirRelacion(String(ventaTecho.codven), null, extra[4]!, 1), errorHttp('PT438', 409));
   });
 
   await t.test('HU-006: una venta anterior al descuento (NULL) resuelve su techo con descuento 0; cancelada responde PT623', async () => {

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 
 interface Valor<T> { r: T }
-interface ErrorSQL { code?: string; message?: string }
+interface ErrorSQL { code?: string; message?: string; detail?: string }
 interface VentaSQL {
   codven: string; coduni: string; codcli: string; codsep: string | null; importe: number;
   precioBaseAcordado: number | null; adicionalTechoReferencial: number | null; adicionalTechoAcordado: number | null;
@@ -56,7 +56,27 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
   };
   const escalar = async <T>(sql: string, params: unknown[] = []): Promise<T> =>
     (await db.query<Valor<T>>(sql, params)).rows[0]!.r;
-  const error = (codigo: string) => (e: unknown) => (e as ErrorSQL).code === codigo;
+  const jsonError = (valor?: string): Record<string, unknown> | null => {
+    if (!valor) return null;
+    try {
+      const resultado: unknown = JSON.parse(valor);
+      return typeof resultado === 'object' && resultado !== null
+        ? resultado as Record<string, unknown> : null;
+    } catch { return null; }
+  };
+  const error = (codigo: string) => (e: unknown) => {
+    const valor = e as ErrorSQL;
+    if (valor.code === codigo) return true;
+    return valor.code === 'PGRST' && jsonError(valor.message)?.code === codigo;
+  };
+  const errorHttp = (codigo: string, status: number) => (e: unknown) => {
+    const valor = e as ErrorSQL;
+    const mensaje = valor.code === 'PGRST' ? jsonError(valor.message) : null;
+    const detalle = jsonError(valor.detail);
+    return mensaje?.code === codigo && mensaje.details === null && mensaje.hint === null
+      && detalle?.status === status
+      && (status !== 500 || mensaje.message === 'Error interno al procesar la corrección de la venta');
+  };
   const claveNueva = () => randomUUID();
   const ventaParams = (coduni: string, opciones: Partial<{
     codcli: number; responsable: number; sede: number; fecha: string; modalidad: string;
@@ -329,6 +349,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     // El historial canónico debe poder reconstruirse también si el runner la reintenta.
     await db.exec(leer('supabase/migrations/202611150003_hu032_entrega_moto_vendida.sql'));
     await db.exec(leer('supabase/migrations/202611190001_hu021_retorno_fisico.sql'));
+    await db.exec(leer('supabase/migrations/202611190002_hu022_transporte_errores_postgrest.sql'));
   } catch (error) {
     await db.exec('ROLLBACK');
     throw new Error(`HU-032 migration failed: ${(error as Error).message} ${JSON.stringify(error)}`);
@@ -1563,7 +1584,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
     assert.deepEqual(await snapshot(), antes, 'registrar la entrega no modifica ventas, ubicación, techo, movimientos ni preparación');
 
     await login(1);
-    await assert.rejects(corregirVentaHU022(venta.codven, '2', null, 1), error('PT700'),
+    await assert.rejects(corregirVentaHU022(venta.codven, '2', null, 1), errorHttp('PT700', 409),
       'HU-022 debe bloquear también la corrección solo de comprador tras una entrega');
     const unidadIntercambio = await crearUnidadHU021();
     const ventaIntercambio = await crearVentaConAcuerdoEntrega(unidadIntercambio, 'Embalada');
@@ -1572,7 +1593,7 @@ test('HU-006 PostgreSQL: venta, pagos, conversión, techo, idempotencia y seguri
         'b',(SELECT hu022_versionrelacion FROM public.venta WHERE codven=$2)) r`, [venta.codven, ventaIntercambio.codven]));
     await assert.rejects(escalar(
       `SELECT public.hu022_intercambiar_ventas($1,NULL,$2,$3,$4,NULL,$5,$6,'Intercambio tras entrega',$7::uuid) r`,
-      [venta.codven, unidadIntercambio, versiones.a, ventaIntercambio.codven, unidad, versiones.b, claveNueva()]), error('PT700'),
+      [venta.codven, unidadIntercambio, versiones.a, ventaIntercambio.codven, unidad, versiones.b, claveNueva()]), errorHttp('PT700', 409),
       'HU-022 debe bloquear el intercambio si cualquiera de las ventas tiene entrega efectiva');
     const cancelada = await cancelarVentaHU021(venta.codven, 'Cancelación posterior a entrega', null);
     assert.equal(cancelada.entregaConservada, true);
